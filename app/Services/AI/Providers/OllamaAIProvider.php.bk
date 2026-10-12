@@ -1,0 +1,106 @@
+<?php
+
+namespace App\Services\AI\Providers;
+
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
+use RuntimeException;
+use Throwable;
+
+class OllamaAIProvider implements AIProvider
+{
+    public function chat(
+        string $systemPrompt,
+        Collection $messages,
+        string $message
+    ): string {
+        $baseUrl = rtrim(
+            config('services.ollama.base_url', 'http://localhost:11434'),
+            '/'
+        );
+
+        $model = config('services.ollama.model', 'qwen3:8b');
+
+        $conversation = [];
+
+        if (trim($systemPrompt) !== '') {
+            $conversation[] = [
+                'role' => 'system',
+                'content' => $systemPrompt,
+            ];
+        }
+
+        foreach ($messages as $historyMessage) {
+            $role = $historyMessage->role === 'assistant'
+                ? 'assistant'
+                : 'user';
+
+            $conversation[] = [
+                'role' => $role,
+                'content' => $historyMessage->content,
+            ];
+        }
+
+        $conversation[] = [
+            'role' => 'user',
+            'content' => $message,
+        ];
+
+        $startedAt = microtime(true);
+
+        try {
+            $response = Http::timeout(180)
+                ->acceptJson()
+                ->post($baseUrl . '/api/chat', [
+                    'model' => $model,
+                    'messages' => $conversation,
+                    'stream' => false,
+                    'think' => false,
+                ]);
+
+            $durationMs = (int) round(
+                (microtime(true) - $startedAt) * 1000
+            );
+
+            Log::info('AI Ollama request completed', [
+                'model' => $model,
+                'duration_ms' => $durationMs,
+                'history_messages' => $messages->count(),
+                'system_prompt_chars' => mb_strlen($systemPrompt),
+                'request_message_chars' => mb_strlen($message),
+                'http_status' => $response->status(),
+            ]);
+        } catch (Throwable $exception) {
+            Log::error('AI Ollama request failed', [
+                'model' => $model,
+                'duration_ms' => (int) round(
+                    (microtime(true) - $startedAt) * 1000
+                ),
+                'history_messages' => $messages->count(),
+                'system_prompt_chars' => mb_strlen($systemPrompt),
+                'exception' => get_class($exception),
+                'error' => $exception->getMessage(),
+            ]);
+
+            throw $exception;
+        }
+
+        if (! $response->successful()) {
+            throw new RuntimeException(
+                'Ollama API request failed: HTTP '
+                . $response->status() . '.'
+            );
+        }
+
+        $text = $response->json('message.content');
+
+        if (! is_string($text) || trim($text) === '') {
+            throw new RuntimeException(
+                'Ollama API returned an empty response.'
+            );
+        }
+
+        return trim($text);
+    }
+}

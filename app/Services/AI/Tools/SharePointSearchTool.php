@@ -2,23 +2,12 @@
 
 namespace App\Services\AI\Tools;
 
-use App\Services\MicrosoftGraphService;
+use App\Models\SharePointDocument;
+use Illuminate\Database\Eloquent\Builder;
 use InvalidArgumentException;
-use RuntimeException;
-
 
 class SharePointSearchTool implements Tool
 {
-    private const MAX_DEPTH = 8;
-    private const MAX_SCANNED_ITEMS = 1000;
-
-    private int $scannedItems = 0;
-
-    public function __construct(
-        private MicrosoftGraphService $graph
-    ) {
-    }
-
     public function name(): string
     {
         return 'sharepoint_search';
@@ -26,7 +15,7 @@ class SharePointSearchTool implements Tool
 
     public function description(): string
     {
-        return 'Search filenames recursively in the HR-GARII SharePoint Documents library.';
+        return 'Search SharePoint documents by individual keywords in filenames and folder paths. Returns matching document metadata and SharePoint links.';
     }
 
     public function execute(array $arguments): mixed
@@ -39,144 +28,111 @@ class SharePointSearchTool implements Tool
             );
         }
 
-        $site = $this->graph->getHrGariiSite();
-        $siteId = $site['id'] ?? null;
+        // Split a natural-language query into individual keywords.
+        $keywords = preg_split('/\s+/u', mb_strtolower($query)) ?: [];
 
-        if (!is_string($siteId) || $siteId === '') {
-            throw new RuntimeException(
-                'Could not determine the HR-GARII site ID.'
-            );
+        $keywords = array_values(array_unique(array_filter(
+            $keywords,
+            fn (string $word): bool =>
+                mb_strlen($word) >= 3
+                && !in_array($word, [
+                    'yang', 'dan', 'atau', 'dari', 'untuk',
+                    'dengan', 'file', 'dokumen', 'cari',
+                    'tolong', 'saya', 'ingin', 'lokasi',
+                    'sharepoint', 'tentang', 'pada', 'the',
+                    'and', 'for', 'with',
+                ], true)
+        )));
+
+        if (empty($keywords)) {
+            $keywords = [mb_strtolower($query)];
         }
 
-        $drives = $this->graph->get(
-            'sites/' . rawurlencode($siteId) . '/drives'
-        );
+        // Match any keyword in either the filename or folder path.
+        $documents = SharePointDocument::query()
+            ->where(function (Builder $outer) use ($keywords) {
+                foreach ($keywords as $keyword) {
+                    $pattern = '%' . $this->escapeLike($keyword) . '%';
 
-        $driveId = null;
+                    $outer->orWhere(function (Builder $inner) use ($pattern) {
+                        $inner->where('name', 'like', $pattern)
+                            ->orWhere('path', 'like', $pattern);
+                    });
+                }
+            })
+            ->limit(200)
+            ->get([
+                'site_id',
+                'drive_id',
+                'item_id',
+                'name',
+                'extension',
+                'mime_type',
+                'size',
+                'path',
+                'web_url',
+                'last_modified_at',
+            ]);
 
-        foreach ($drives['value'] ?? [] as $drive) {
-            if (($drive['name'] ?? '') === 'Documents') {
-                $driveId = $drive['id'] ?? null;
-                break;
-            }
-        }
+        // Rank documents by how many keywords match their metadata.
+        $rankedDocuments = $documents
+            ->map(function (SharePointDocument $document) use ($keywords) {
+                $name = mb_strtolower((string) $document->name);
+                $path = mb_strtolower((string) $document->path);
 
-        if (!is_string($driveId) || $driveId === '') {
-            throw new RuntimeException(
-                'The Documents library was not found in HR-GARII.'
-            );
-        }
+                $score = 0;
 
-        $this->scannedItems = 0;
-        $matches = [];
+                foreach ($keywords as $keyword) {
+                    if (str_contains($name, $keyword)) {
+                        $score += 3;
+                    }
 
-        $this->searchFolder(
-            $driveId,
-            null,
-            $query,
-            0,
-            '',
-            $matches
-        );
+                    if (str_contains($path, $keyword)) {
+                        $score += 1;
+                    }
+                }
+
+                $document->search_score = $score;
+
+                return $document;
+            })
+            ->sortByDesc('search_score')
+            ->take(50)
+            ->values();
 
         return [
             'success' => true,
-            'site' => $site['displayName'] ?? 'HR-GARII',
+            'source' => 'local_index',
             'library' => 'Documents',
             'query' => $query,
-            'count' => count($matches),
-            'scannedItems' => $this->scannedItems,
-            'limitReached' => $this->scannedItems >= self::MAX_SCANNED_ITEMS,
-            'documents' => $matches,
+            'keywords' => $keywords,
+            'count' => $rankedDocuments->count(),
+            'limit' => 50,
+            'message' => $rankedDocuments->isEmpty()
+                ? 'No matching documents were found in the local index. The document may not be indexed yet.'
+                : 'Search completed using keyword matching against the local SharePoint metadata index.',
+            'documents' => $rankedDocuments
+                ->map(fn (SharePointDocument $document) => [
+                    'id' => $document->item_id,
+                    'name' => $document->name,
+                    'extension' => $document->extension,
+                    'mimeType' => $document->mime_type,
+                    'size' => $document->size,
+                    'path' => $document->path,
+                    'webUrl' => $document->web_url,
+                    'lastModifiedDateTime' =>
+                        $document->last_modified_at?->toISOString(),
+                ])
+                ->all(),
         ];
     }
 
-   
-    private function searchFolder(
-        string $driveId,
-        ?string $folderId,
-        string $query,
-        int $depth,
-        string $parentPath,
-        array &$matches
-    ): void {
-        if (
-            $depth > self::MAX_DEPTH ||
-            $this->scannedItems >= self::MAX_SCANNED_ITEMS
-        ) {
-            return;
-        }
-
-        if ($folderId === null) {
-            $endpoint = 'drives/' . rawurlencode($driveId)
-                . '/root/children?$select=id,name,webUrl,size,lastModifiedDateTime,file,folder&$top=200';
-        } else {
-            $endpoint = 'drives/' . rawurlencode($driveId)
-                . '/items/' . rawurlencode($folderId)
-                . '/children?$select=id,name,webUrl,size,lastModifiedDateTime,file,folder&$top=200';
-        }
-
-        $result = $this->graph->get($endpoint);
-        $folders = [];
-        $needle = mb_strtolower($query);
-
-        // Pass 1: inspect current folder files before entering subfolders.
-        foreach ($result['value'] ?? [] as $item) {
-            if ($this->scannedItems >= self::MAX_SCANNED_ITEMS) {
-                break;
-            }
-
-            $this->scannedItems++;
-
-            $name = (string) ($item['name'] ?? '');
-            $path = $parentPath === ''
-                ? $name
-                : $parentPath . '/' . $name;
-
-            if (isset($item['folder'])) {
-                $folders[] = [
-                    'id' => $item['id'] ?? null,
-                    'path' => $path,
-                ];
-
-                continue;
-            }
-
-            if (
-                isset($item['file']) &&
-                str_contains(mb_strtolower($name), $needle)
-            ) {
-                $matches[] = [
-                    'id' => $item['id'] ?? null,
-                    'name' => $name,
-                    'path' => $path,
-                    'webUrl' => $item['webUrl'] ?? null,
-                    'size' => $item['size'] ?? null,
-                    'lastModifiedDateTime' =>
-                        $item['lastModifiedDateTime'] ?? null,
-                ];
-            }
-        }
-
-        // Pass 2: recursively inspect subfolders.
-        foreach ($folders as $folder) {
-            if ($this->scannedItems >= self::MAX_SCANNED_ITEMS) {
-                return;
-            }
-
-            if (!is_string($folder['id']) || $folder['id'] === '') {
-                continue;
-            }
-
-            $this->searchFolder(
-                $driveId,
-                $folder['id'],
-                $query,
-                $depth + 1,
-                $folder['path'],
-                $matches
-            );
-        }
+    private function escapeLike(string $value): string
+    {
+        return str_replace(
+            ['\\', '%', '_'],
+            ['\\\\', '\\%', '\\_'],
+            $value
+        );
     }
-
 }

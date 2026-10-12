@@ -7,7 +7,9 @@ use App\Services\AI\Providers\AIProvider;
 use App\Services\AI\ToolExecutor;
 use App\Services\AI\ToolRegistry;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Log;
 use JsonException;
+use Throwable;
 
 class GeneralAgent
 {
@@ -23,6 +25,7 @@ class GeneralAgent
         Collection $messages,
         string $message
     ): string {
+        $agentStartedAt = microtime(true);
         $systemPrompt = $this->buildSystemPrompt();
 
         $response = $this->provider->chat(
@@ -33,20 +36,141 @@ class GeneralAgent
 
         $decision = $this->parseToolDecision($response);
 
-        // Jika AI tidak meminta tool, pertahankan
-        // perilaku chat yang sudah berjalan.
         if ($decision === null) {
+            Log::info('AI Agent completed without tool', [
+                'duration_ms' => (int) round(
+                    (microtime(true) - $agentStartedAt) * 1000
+                ),
+                'history_messages' => $messages->count(),
+            ]);
+
             return $response;
         }
 
         $toolName = $decision['tool'];
         $arguments = $decision['arguments'];
 
-        // ToolExecutor memeriksa registrasi dan izin akses.
-        $result = $this->toolExecutor->execute(
-            $toolName,
-            $arguments
-        );
+        $toolStartedAt = microtime(true);
+
+        try {
+            $result = $this->toolExecutor->execute(
+                $toolName,
+                $arguments
+            );
+        } catch (Throwable $exception) {
+            Log::error('AI Agent tool execution failed', [
+                'tool' => $toolName,
+                'duration_ms' => (int) round(
+                    (microtime(true) - $toolStartedAt) * 1000
+                ),
+                'exception' => get_class($exception),
+                'error' => $exception->getMessage(),
+            ]);
+
+            throw $exception;
+        }
+
+        Log::info('AI Agent tool execution completed', [
+            'tool' => $toolName,
+            'duration_ms' => (int) round(
+                (microtime(true) - $toolStartedAt) * 1000
+            ),
+        ]);
+
+
+        
+        // Return SharePoint search results directly.
+        // Avoid sending large metadata results to Ollama again.
+        if (
+            $toolName === 'sharepoint_search'
+            && is_array($result)
+            && ($result['success'] ?? false) === true
+        ) {
+            $documents = $result['documents'] ?? [];
+            $query = (string) ($result['query'] ?? '');
+
+            if (empty($documents)) {
+                return "Belum ditemukan dokumen yang cocok untuk pencarian: "
+                    . $query
+                    . ". Dokumen mungkin belum masuk indeks lokal "
+                    . "atau kata kunci perlu diperbaiki.";
+            }
+
+            $response = "Hasil pencarian dokumen SharePoint\n";
+            $response .= "Kata kunci: {$query}\n";
+            $response .= "Jumlah hasil: " . count($documents) . "\n\n";
+
+            foreach ($documents as $index => $document) {
+                $number = $index + 1;
+                $name = (string) ($document['name'] ?? 'Nama tidak tersedia');
+                $path = (string) ($document['path'] ?? 'Lokasi tidak tersedia');
+                $extension = (string) ($document['extension'] ?? '');
+
+                if ($extension === '') {
+                    $extension = pathinfo($name, PATHINFO_EXTENSION);
+                }
+
+                $url = (string) ($document['webUrl'] ?? '');
+
+                $response .= "{$number}. {$name}\n";
+                $response .= "Lokasi: {$path}\n";
+                $response .= "Tipe file: "
+                    . ($extension !== '' ? strtoupper($extension) : 'Tidak diketahui')
+                    . "\n";
+
+                if ($url !== '') {
+                    $response .= "Tautan SharePoint: {$url}\n";
+                }
+
+                $response .= "\n";
+            }
+
+            Log::info('AI Agent returned SharePoint search results directly', [
+                'tool' => $toolName,
+                'query' => $query,
+                'result_count' => count($documents),
+            ]);
+
+            return trim($response);
+        }
+
+
+
+        
+        // Return extracted XLSX content directly to avoid a
+        // second, potentially expensive Ollama request.
+        if (
+            $toolName === 'sharepoint_read_document'
+            && is_array($result)
+            && ($result['success'] ?? false) === true
+            && strtolower((string) ($result['extension'] ?? '')) === 'xlsx'
+        ) {
+            $documentName = (string) ($result['document'] ?? 'Unknown');
+            $documentPath = (string) ($result['path'] ?? 'Not available');
+            $text = trim((string) ($result['text'] ?? ''));
+
+            if ($text !== '') {
+                $response = "Dokumen Excel berhasil dibaca.\n\n";
+                $response .= "Nama file: {$documentName}\n";
+                $response .= "Lokasi: {$documentPath}\n\n";
+                $response .= "Hasil ekstraksi:\n\n";
+                $response .= $text;
+
+                if (($result['truncated'] ?? false) === true) {
+                    $response .= "\n\nCatatan: hasil ekstraksi dipotong "
+                        . "karena batas panjang teks yang dikonfigurasi.";
+                }
+
+                Log::info('AI Agent returned XLSX extraction directly', [
+                    'tool' => $toolName,
+                    'document' => $documentName,
+                    'text_length' => mb_strlen($text),
+                ]);
+
+                return $response;
+            }
+        }
+
 
         $toolResult = json_encode(
             $result,
@@ -55,9 +179,7 @@ class GeneralAgent
                 | JSON_PARTIAL_OUTPUT_ON_ERROR
         );
 
-        // Kirim hasil tool kembali ke AI agar dapat
-        // menyusun jawaban untuk pengguna.
-        return $this->provider->chat(
+        $finalResponse = $this->provider->chat(
             $systemPrompt
                 . "\n\nYou have already executed the requested tool. "
                 . "Do not request another tool in this response. "
@@ -67,6 +189,16 @@ class GeneralAgent
                 . "Tool: {$toolName}\n"
                 . "Result: {$toolResult}"
         );
+
+        Log::info('AI Agent completed with tool', [
+            'tool' => $toolName,
+            'duration_ms' => (int) round(
+                (microtime(true) - $agentStartedAt) * 1000
+            ),
+            'history_messages' => $messages->count(),
+        ]);
+
+        return $finalResponse;
     }
 
     private function buildSystemPrompt(): string
@@ -105,7 +237,6 @@ class GeneralAgent
     ): ?array {
         $response = trim($response);
 
-        // Mendukung JSON yang dibungkus code fence.
         $response = preg_replace(
             '/^```(?:json)?\s*|\s*```$/i',
             '',
@@ -132,7 +263,6 @@ class GeneralAgent
             return null;
         }
 
-        // Jangan menjalankan nama tool yang tidak terdaftar.
         if ($this->toolRegistry->get($data['tool']) === null) {
             return null;
         }

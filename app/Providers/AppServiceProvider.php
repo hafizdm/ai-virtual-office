@@ -4,9 +4,11 @@ namespace App\Providers;
 
 use App\Services\AI\Providers\AIProvider;
 use App\Services\AI\Providers\GeminiAIProvider;
+use App\Services\AI\Providers\OllamaAIProvider;
 use App\Services\AI\Providers\MockAIProvider;
 use App\Services\AI\ToolAccess;
 use App\Services\AI\ToolRegistry;
+use App\Services\AI\Tools\DocumentReaderTool;
 use App\Services\AI\Tools\MockTool;
 use App\Services\AI\Tools\SharePointSearchTool;
 use Illuminate\Support\ServiceProvider;
@@ -24,6 +26,7 @@ class AppServiceProvider extends ServiceProvider
                 return match ($driver) {
                     'mock' => $app->make(MockAIProvider::class),
                     'gemini' => $app->make(GeminiAIProvider::class),
+                    'ollama' => $app->make(OllamaAIProvider::class),
                     default => throw new InvalidArgumentException(
                         "Unsupported AI driver [{$driver}]."
                     ),
@@ -44,6 +47,10 @@ class AppServiceProvider extends ServiceProvider
                     $app->make(SharePointSearchTool::class)
                 );
 
+                $registry->register(
+                    $app->make(DocumentReaderTool::class)
+                );
+
                 return $registry;
             }
         );
@@ -55,6 +62,7 @@ class AppServiceProvider extends ServiceProvider
 
                 $access->allow('mock_tool');
                 $access->allow('sharepoint_search');
+                $access->allow('sharepoint_read_document');
 
                 return $access;
             }
