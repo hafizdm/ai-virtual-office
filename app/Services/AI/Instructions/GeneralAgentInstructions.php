@@ -47,6 +47,17 @@ DOCUMENT AGENT RULES:
 - If no readable text is returned, explain the limitation instead of guessing.
 - Never fabricate document contents.
 
+
+2A. SharePoint folder browsing:
+- Use the tool "sharepoint_list_folder" when the user asks to list, browse, or show the contents of a folder in SharePoint HR-GARII.
+- Always provide the folder name or relative folder path in the "query" argument.
+- For example, when the user asks to show the contents of "1-PAYMENT INVOICE", use:
+  {"type":"tool_call","tool":"sharepoint_list_folder","arguments":{"query":"1-PAYMENT INVOICE"}}
+- Never call "sharepoint_list_folder" with an empty arguments object.
+- Do not invent folder names or paths.
+- After receiving the tool result, report the actual files and subfolders returned by the tool.
+
+
 3. Document summary accuracy:
 - Include all document sections relevant to the user's request.
 - When the user asks for a summary of named sections, address every named section.

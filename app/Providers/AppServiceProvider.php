@@ -12,6 +12,7 @@ use App\Services\AI\Tools\DocumentReaderTool;
 use App\Services\AI\Tools\MockTool;
 use App\Services\AI\Tools\SharePointSearchTool;
 use Illuminate\Support\ServiceProvider;
+use App\Services\AI\Tools\FolderReaderTool;
 use InvalidArgumentException;
 
 class AppServiceProvider extends ServiceProvider
@@ -51,6 +52,10 @@ class AppServiceProvider extends ServiceProvider
                     $app->make(DocumentReaderTool::class)
                 );
 
+                $registry->register(
+                    $app->make(FolderReaderTool::class)
+                );
+
                 return $registry;
             }
         );
@@ -63,6 +68,7 @@ class AppServiceProvider extends ServiceProvider
                 $access->allow('mock_tool');
                 $access->allow('sharepoint_search');
                 $access->allow('sharepoint_read_document');
+                $access->allow('sharepoint_list_folder');
 
                 return $access;
             }

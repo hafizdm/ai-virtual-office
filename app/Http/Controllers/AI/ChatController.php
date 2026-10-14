@@ -8,7 +8,7 @@ use App\Models\Message;
 use App\Services\AI\AIService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use RuntimeException;
+use Throwable;
 
 class ChatController extends Controller
 {
@@ -74,7 +74,7 @@ class ChatController extends Controller
                 $messages,
                 $validated['content']
             );
-        } catch (RuntimeException $exception) {
+        } catch (Throwable $exception) {
             report($exception);
 
             return redirect()
@@ -102,6 +102,17 @@ class ChatController extends Controller
         }
 
         return redirect()->route('ai.chat.show', $conversation);
+    }
+
+    public function destroy(Conversation $conversation)
+    {
+        $this->authorizeConversation($conversation);
+
+        $conversation->delete();
+
+        return redirect()
+            ->route('ai.chat.index')
+            ->with('success', 'Percakapan berhasil dihapus.');
     }
 
     private function authorizeConversation(Conversation $conversation): void

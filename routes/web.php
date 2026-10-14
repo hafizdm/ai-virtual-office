@@ -37,6 +37,9 @@ Route::middleware('auth')->group(function () {
     Route::get('/ai/chat/{conversation}', [ChatController::class, 'show'])
         ->name('ai.chat.show');
 
+    Route::delete('/ai/chat/{conversation}', [ChatController::class, 'destroy'])
+        ->name('ai.chat.destroy');
+
     Route::post('/ai/chat/{conversation}/messages', [ChatController::class, 'send'])
         ->name('ai.chat.send');
 });

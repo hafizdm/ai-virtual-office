@@ -77,8 +77,6 @@ class GeneralAgent
             ),
         ]);
 
-
-        
         // Return SharePoint search results directly.
         // Avoid sending large metadata results to Ollama again.
         if (
@@ -102,8 +100,12 @@ class GeneralAgent
 
             foreach ($documents as $index => $document) {
                 $number = $index + 1;
-                $name = (string) ($document['name'] ?? 'Nama tidak tersedia');
-                $path = (string) ($document['path'] ?? 'Lokasi tidak tersedia');
+                $name = (string) (
+                    $document['name'] ?? 'Nama tidak tersedia'
+                );
+                $path = (string) (
+                    $document['path'] ?? 'Lokasi tidak tersedia'
+                );
                 $extension = (string) ($document['extension'] ?? '');
 
                 if ($extension === '') {
@@ -115,7 +117,11 @@ class GeneralAgent
                 $response .= "{$number}. {$name}\n";
                 $response .= "Lokasi: {$path}\n";
                 $response .= "Tipe file: "
-                    . ($extension !== '' ? strtoupper($extension) : 'Tidak diketahui')
+                    . (
+                        $extension !== ''
+                            ? strtoupper($extension)
+                            : 'Tidak diketahui'
+                    )
                     . "\n";
 
                 if ($url !== '') {
@@ -125,28 +131,34 @@ class GeneralAgent
                 $response .= "\n";
             }
 
-            Log::info('AI Agent returned SharePoint search results directly', [
-                'tool' => $toolName,
-                'query' => $query,
-                'result_count' => count($documents),
-            ]);
+            Log::info(
+                'AI Agent returned SharePoint search results directly',
+                [
+                    'tool' => $toolName,
+                    'query' => $query,
+                    'result_count' => count($documents),
+                ]
+            );
 
             return trim($response);
         }
 
-
-
-        
-        // Return extracted XLSX content directly to avoid a
-        // second, potentially expensive Ollama request.
+        // Return extracted XLSX content directly.
+        // Avoid a second, potentially expensive Ollama request.
         if (
             $toolName === 'sharepoint_read_document'
             && is_array($result)
             && ($result['success'] ?? false) === true
-            && strtolower((string) ($result['extension'] ?? '')) === 'xlsx'
+            && strtolower(
+                (string) ($result['extension'] ?? '')
+            ) === 'xlsx'
         ) {
-            $documentName = (string) ($result['document'] ?? 'Unknown');
-            $documentPath = (string) ($result['path'] ?? 'Not available');
+            $documentName = (string) (
+                $result['document'] ?? 'Unknown'
+            );
+            $documentPath = (string) (
+                $result['path'] ?? 'Not available'
+            );
             $text = trim((string) ($result['text'] ?? ''));
 
             if ($text !== '') {
@@ -161,16 +173,129 @@ class GeneralAgent
                         . "karena batas panjang teks yang dikonfigurasi.";
                 }
 
-                Log::info('AI Agent returned XLSX extraction directly', [
-                    'tool' => $toolName,
-                    'document' => $documentName,
-                    'text_length' => mb_strlen($text),
-                ]);
+                Log::info(
+                    'AI Agent returned XLSX extraction directly',
+                    [
+                        'tool' => $toolName,
+                        'document' => $documentName,
+                        'text_length' => mb_strlen($text),
+                    ]
+                );
 
                 return $response;
             }
         }
 
+        // Return SharePoint folder contents directly.
+        // Avoid a second, potentially expensive Ollama request.
+        if (
+            $toolName === 'sharepoint_list_folder'
+            && is_array($result)
+        ) {
+            $query = (string) ($result['query'] ?? '');
+            $folder = (string) ($result['folder'] ?? $query);
+            $items = $result['items'] ?? [];
+
+            if (($result['success'] ?? false) !== true) {
+                $message = (string) (
+                    $result['message']
+                    ?? 'Folder SharePoint tidak dapat ditemukan.'
+                );
+
+                Log::info(
+                    'AI Agent returned SharePoint folder result directly',
+                    [
+                        'tool' => $toolName,
+                        'query' => $query,
+                        'success' => false,
+                    ]
+                );
+
+                return $message;
+            }
+
+            $response = "Isi folder SharePoint berhasil dibaca.\n\n";
+            $response .= "Folder: {$folder}\n";
+            $response .= 'Jumlah item: '
+                . (int) ($result['count'] ?? count($items))
+                . "\n\n";
+
+            if ($items === []) {
+                $response .= 'Folder ini tidak memiliki file atau subfolder.';
+            } else {
+                foreach ($items as $index => $item) {
+                    $number = $index + 1;
+                    $name = (string) (
+                        $item['name'] ?? 'Nama tidak tersedia'
+                    );
+                    $type = strtolower(
+                        (string) ($item['type'] ?? 'file')
+                    );
+
+                    $response .= "{$number}. {$name}\n";
+                    $response .= '   Tipe: '
+                        . ($type === 'folder' ? 'Folder' : 'File')
+                        . "\n";
+
+                    if (
+                        isset($item['size'])
+                        && is_numeric($item['size'])
+                    ) {
+                        $response .= '   Ukuran: '
+                            . number_format(
+                                (float) $item['size'],
+                                0,
+                                ',',
+                                '.'
+                            )
+                            . " bytes\n";
+                    }
+
+                    $modified = $item['lastModifiedDateTime'] ?? null;
+
+                    if (
+                        is_string($modified)
+                        && $modified !== ''
+                    ) {
+                        $timestamp = strtotime($modified);
+
+                        $response .= '   Terakhir diubah: '
+                            . (
+                                $timestamp !== false
+                                    ? date('d-m-Y H:i', $timestamp)
+                                    : $modified
+                            )
+                            . "\n";
+                    }
+
+                    $url = $item['webUrl'] ?? null;
+
+                    if (is_string($url) && $url !== '') {
+                        $response .= "   Tautan: {$url}\n";
+                    }
+
+                    $response .= "\n";
+                }
+            }
+
+            if (($result['truncated'] ?? false) === true) {
+                $response .= "\nCatatan: daftar item dibatasi "
+                    . 'oleh batas maksimum hasil Folder Reader.';
+            }
+
+            Log::info(
+                'AI Agent returned SharePoint folder result directly',
+                [
+                    'tool' => $toolName,
+                    'query' => $query,
+                    'folder' => $folder,
+                    'result_count' => count($items),
+                    'success' => true,
+                ]
+            );
+
+            return trim($response);
+        }
 
         $toolResult = json_encode(
             $result,
