@@ -1,0 +1,998 @@
+<?php
+namespace App\Http\Controllers\AI;
+use App\Http\Controllers\Controller;
+use App\Models\Conversation;
+use App\Models\CvBatch;
+use App\Models\Message;
+use App\Services\AI\AIService;
+use App\Services\AI\ToolRegistry;
+use App\Services\AI\CV\SharePointCvReader;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+use Throwable;
+use App\Services\AI\CV\CvTenderProcessor;
+use App\Jobs\ProcessCvBatchItem;
+use ZipArchive;
+class ChatController extends Controller
+{
+    public function __construct(
+        private AIService $aiService,
+        private CvTenderProcessor $cvTenderProcessor
+    ) {
+    }
+    public function index()
+    {
+        $conversations = Conversation::where('user_id', Auth::id())
+            ->latest()
+            ->get();
+        return view('ai.chat.index', compact('conversations'));
+    }
+    public function storeConversation()
+    {
+        $conversation = Conversation::create([
+            'user_id' => Auth::id(),
+            'title' => 'New Conversation',
+        ]);
+        return redirect()->route('ai.chat.show', $conversation);
+    }
+
+    public function show(Conversation $conversation)
+    {
+        $this->authorizeConversation($conversation);
+        $conversations = Conversation::where('user_id', Auth::id())
+            ->latest()
+            ->get();
+        $conversation->load('messages');
+        $cvBatch = CvBatch::query()
+            ->where('user_id', Auth::id())
+            ->where('conversation_id', $conversation->id)
+            ->with('items')
+            ->latest('id')
+            ->first();
+        return view('ai.chat.show', [
+            'conversation' => $conversation,
+            'conversations' => $conversations,
+            'cvBatch' => $cvBatch,
+        ]);
+    }
+    
+    public function send(Request $request, Conversation $conversation)
+    {
+        $this->authorizeConversation($conversation);
+        $validated = $request->validate([
+            'content' => ['required', 'string', 'max:10000'],
+            'template' => ['nullable', 'file', 'mimes:docx', 'max:10240'],
+        ]);
+        $templatePath = null;
+        // Simpan template jika pengguna melampirkan file.
+        if ($request->hasFile('template')) {
+            $file = $validated['template'];
+            if (strtolower($file->getClientOriginalExtension()) !== 'docx') {
+                return back()
+                    ->withInput()
+                    ->withErrors([
+                        'template' => 'Template harus berupa file Word (.docx).',
+                    ]);
+            }
+            $templatePath = $file->storeAs(
+                'cv-templates/' . Auth::id(),
+                Str::uuid() . '.docx',
+                'local'
+            );
+            if (! $templatePath) {
+                return back()
+                    ->withInput()
+                    ->withErrors([
+                        'template' => 'Template gagal disimpan. Silakan coba lagi.',
+                    ]);
+            }
+            try {
+                CvBatch::create([
+                    'user_id' => Auth::id(),
+                    'conversation_id' => $conversation->id,
+                    'template_path' => $templatePath,
+                    'template_original_name' => $file->getClientOriginalName(),
+                    'source_folder' => null,
+                    'status' => 'draft',
+                ]);
+            } catch (Throwable $exception) {
+                Storage::disk('local')->delete($templatePath);
+                report($exception);
+                return back()
+                    ->withInput()
+                    ->withErrors([
+                        'template' => 'Data template gagal disimpan. Silakan coba lagi.',
+                    ]);
+            }
+        }
+        $messages = $conversation->messages()
+            ->orderBy('id')
+            ->get();
+        Message::create([
+            'conversation_id' => $conversation->id,
+            'role' => 'user',
+            'content' => $validated['content'],
+        ]);
+        try {
+            // Tangani alur CV secara deterministik agar daftar file tersimpan
+            // ke CvBatch dan tidak hanya ditampilkan sebagai teks oleh AI.
+            $response = $this->handleCvTenderChatMessage(
+                $conversation,
+                $validated['content']
+            );
+            // Pesan biasa tetap menggunakan GeneralAgent seperti sebelumnya.
+            if ($response === null) {
+                $response = $this->aiService->chat(
+                    $messages,
+                    $validated['content']
+                );
+            }
+        } catch (Throwable $exception) {
+            report($exception);
+            return redirect()
+                ->route('ai.chat.show', $conversation)
+                ->withInput()
+                ->with(
+                    'ai_error',
+                    'AI atau proses SharePoint sedang mengalami gangguan. '
+                    . 'Silakan coba lagi beberapa saat.'
+                );
+        }
+        if ($templatePath !== null) {
+            $response = "Template CV berhasil diterima dan disimpan sebagai draft. "
+                . "Langkah berikutnya adalah memilih folder sumber CV di SharePoint "
+                . "sebelum memulai pemrosesan.\n\n"
+                . $response;
+        }
+        Message::create([
+            'conversation_id' => $conversation->id,
+            'role' => 'assistant',
+            'content' => $response,
+        ]);
+        if ($conversation->title === 'New Conversation') {
+            $conversation->update([
+                'title' => str($validated['content'])
+                    ->limit(50)
+                    ->toString(),
+            ]);
+        }
+        return redirect()->route('ai.chat.show', $conversation);
+    }
+    /**
+     * Orchestrate the prompt-driven CV flow without relying on the LLM
+     * to persist batch state. Returns null for ordinary chat messages.
+     */
+    private function handleCvTenderChatMessage(
+        Conversation $conversation,
+        string $message
+    ): ?string {
+        $normalized = mb_strtolower(trim($message));
+        $batch = CvBatch::query()
+            ->where('user_id', Auth::id())
+            ->where('conversation_id', $conversation->id)
+            ->latest('id')
+            ->first();
+
+        // Confirmation/rejection only acts on the latest saved list.
+        if ($batch && $batch->status === 'awaiting_confirmation') {
+            $isConfirmation = preg_match(
+                '/\b(setuju|saya setuju|konfirmasi|saya konfirmasi|lanjutkan|silakan proses|ya,? lanjut|iya,? lanjut|ok,? lanjut)\b/u',
+                $normalized
+            ) === 1;
+            $isRejection = preg_match(
+                '/\b(tidak|jangan|batal|belum setuju|ubah daftar)\b/u',
+                $normalized
+            ) === 1;
+
+            if ($isRejection) {
+                $batch->update([
+                    'status' => 'cancelled',
+                    'finished_at' => now(),
+                ]);
+
+                return 'Baik, daftar CV tersebut dibatalkan. Tidak ada file yang diproses. '
+                    . 'Sekarang Anda dapat mengirim permintaan CV baru.';
+            }
+
+            if ($isConfirmation) {
+                if (! $batch->items()->exists()) {
+                    throw new \RuntimeException('Daftar CV kosong; konfirmasi tidak dapat diproses.');
+                }
+
+                $batch->update([
+                    'status' => 'confirmed',
+                    'confirmed_at' => now(),
+                ]);
+
+                try {
+                    $this->dispatchCvBatch($batch);
+
+                    return 'Konfirmasi berhasil disimpan. Pemrosesan ' . (int) $batch->total_files
+                        . ' CV telah dimasukkan ke antrean dan berjalan di background. '
+                        . 'Anda tidak perlu menunggu halaman ini terbuka. '
+                        . 'Status dan hasil akan diperbarui saat worker memproses setiap CV.';
+                } catch (Throwable $exception) {
+                    report($exception);
+                    $batch->update([
+                        'status' => 'failed',
+                        'finished_at' => now(),
+                    ]);
+
+                    return 'Konfirmasi tersimpan, tetapi batch gagal dimasukkan ke antrean. '
+                        . 'Silakan periksa log Laravel untuk detailnya.';
+                }
+            }
+
+            // Never overwrite a list that the user has not approved or rejected.
+            $isCvRequestWhileAwaiting = preg_match(
+                '/\b(cv|curriculum vitae)\b/u',
+                $normalized
+            ) === 1 && preg_match(
+                '/\b(tender|format|ubah|konversi|convert|standar|standardisasi|template|rapikan)\b/u',
+                $normalized
+            ) === 1;
+
+            if ($isCvRequestWhileAwaiting) {
+                return 'Masih ada daftar CV yang menunggu konfirmasi. '
+                    . 'Balas "Saya setuju, lanjutkan" untuk memproses daftar tersebut, '
+                    . 'atau "Batal" sebelum membuat daftar baru. Tidak ada file yang diproses.';
+            }
+        }
+
+        $isCvRequest = preg_match(
+            '/\b(cv|curriculum vitae)\b/u',
+            $normalized
+        ) === 1 && preg_match(
+            '/\b(tender|format|ubah|konversi|convert|standar|standardisasi|template|rapikan)\b/u',
+            $normalized
+        ) === 1;
+
+        if (! $isCvRequest) {
+            return null;
+        }
+
+        if (
+            ! $batch
+            || ! $batch->template_path
+            || ! Storage::disk('local')->exists($batch->template_path)
+        ) {
+            return 'Saya belum menemukan template CV DOCX yang tersimpan pada percakapan ini. '
+                . 'Silakan unggah template tender melalui tombol lampiran terlebih dahulu, '
+                . 'lalu kirim kembali permintaan konversi CV.';
+        }
+
+        $startNewBatch = in_array(
+            $batch->status,
+            ['completed', 'completed_with_errors', 'failed', 'cancelled'],
+            true
+        );
+
+        if (in_array($batch->status, ['confirmed', 'processing'], true)) {
+            return 'Batch CV sebelumnya masih berjalan atau sudah dikonfirmasi. '
+                . 'Tunggu hingga pemrosesan selesai sebelum mengirim pekerjaan baru.';
+        }
+
+        if (! $startNewBatch && $batch->status !== 'draft') {
+            return 'Batch CV saat ini berstatus ' . strtoupper((string) $batch->status)
+                . '. Saya tidak akan mengubah daftar CV dalam status tersebut.';
+        }
+
+        $sourceFolder = $this->extractCvSourceFolder($message);
+
+        $tool = app(ToolRegistry::class)->get('sharepoint_list_folder');
+
+        if (! $tool) {
+            throw new \RuntimeException('Tool sharepoint_list_folder belum terdaftar.');
+        }
+
+        $result = $tool->execute(['query' => $sourceFolder]);
+
+        if (! is_array($result) || ! ($result['success'] ?? false)) {
+            $reason = is_array($result)
+                ? (string) ($result['message'] ?? 'Folder tidak ditemukan.')
+                : 'Respons SharePoint tidak valid.';
+
+            return 'Saya belum dapat membaca folder SharePoint "' . $sourceFolder . '". ' . $reason;
+        }
+
+        // FolderReaderTool currently caps its result at 100 entries. Refuse a
+        // truncated listing rather than silently presenting it as the full folder.
+        if (($result['truncated'] ?? false) === true) {
+            return 'Folder SharePoint berisi lebih banyak item daripada batas pembacaan saat ini (100). '
+                . 'Tidak ada daftar batch yang disimpan atau file yang diproses. '
+                . 'Kita perlu memperluas pembacaan folder sebelum menjalankan permintaan seluruh CV.';
+        }
+
+        $docxFiles = collect($result['items'] ?? [])
+            ->filter(fn (array $item): bool =>
+                ($item['type'] ?? null) === 'file'
+                && strtolower((string) ($item['extension'] ?? pathinfo((string) ($item['name'] ?? ''), PATHINFO_EXTENSION))) === 'docx'
+                && is_string($item['itemId'] ?? null)
+                && ($item['itemId'] ?? '') !== ''
+                && is_string($item['driveId'] ?? null)
+                && ($item['driveId'] ?? '') !== ''
+            )
+            ->values();
+
+        if ($docxFiles->isEmpty()) {
+            return 'Folder SharePoint berhasil dibaca, tetapi tidak ditemukan file DOCX yang memiliki ID file dan drive yang diperlukan. Tidak ada file yang diproses.';
+        }
+
+        $selection = $this->selectCvFilesFromPrompt($message, $docxFiles);
+
+        if (! ($selection['success'] ?? false)) {
+            return (string) ($selection['message'] ?? 'Target CV tidak dapat divalidasi. Tidak ada file yang diproses.');
+        }
+
+        $selectedFiles = collect($selection['items'] ?? [])->values();
+
+        if ($selectedFiles->isEmpty()) {
+            return 'Tidak ditemukan CV yang cocok dengan target permintaan. '
+                . 'Tidak ada file yang diproses. Periksa nama kandidat atau kriteria yang diberikan.';
+        }
+
+        // Only create a fresh batch after folder listing and target validation
+        // have succeeded. The previous completed batch and its output stay intact.
+        $targetBatch = DB::transaction(function () use (
+            $batch,
+            $startNewBatch,
+            $conversation,
+            $result,
+            $sourceFolder,
+            $selectedFiles
+        ): CvBatch {
+            $activeBatch = $startNewBatch
+                ? CvBatch::create([
+                    'user_id' => Auth::id(),
+                    'conversation_id' => $conversation->id,
+                    'template_path' => $batch->template_path,
+                    'template_original_name' => $batch->template_original_name,
+                    'source_folder' => null,
+                    'status' => 'draft',
+                ])
+                : $batch;
+
+            // This deletion is only permitted on an unprocessed draft.
+            $activeBatch->items()->delete();
+
+            foreach ($selectedFiles as $item) {
+                $activeBatch->items()->create([
+                    'source_item_id' => $item['itemId'],
+                    'drive_id' => $item['driveId'],
+                    'source_filename' => $item['name'] ?? 'Nama CV tidak tersedia',
+                    'source_path' => trim((string) ($result['folder'] ?? $sourceFolder), '/')
+                        . '/' . ($item['name'] ?? ''),
+                    'source_web_url' => $item['webUrl'] ?? null,
+                    'status' => 'pending',
+                ]);
+            }
+
+            $activeBatch->update([
+                'source_folder' => $result['folder'] ?? $sourceFolder,
+                'status' => 'awaiting_confirmation',
+                'total_files' => $selectedFiles->count(),
+                'processed_files' => 0,
+                'successful_files' => 0,
+                'failed_files' => 0,
+                'confirmed_at' => null,
+                'started_at' => null,
+                'finished_at' => null,
+            ]);
+
+            return $activeBatch;
+        });
+
+        $selectionDescription = match ($selection['mode'] ?? 'folder') {
+            'names' => 'kandidat yang diminta',
+            'criteria' => 'CV yang cocok dengan kriteria teks',
+            default => 'file DOCX di folder',
+        };
+
+        $lines = [
+            'Saya menemukan ' . $selectedFiles->count() . ' file CV DOCX untuk ' . $selectionDescription
+                . ' di folder SharePoint: ' . ($result['folder'] ?? $sourceFolder) . '.',
+            '',
+        ];
+
+        foreach ($selectedFiles as $index => $item) {
+            $lines[] = ($index + 1) . '. ' . ($item['name'] ?? 'Nama CV tidak tersedia');
+        }
+
+        $lines[] = '';
+        $lines[] = 'Template yang akan digunakan: ' . $targetBatch->template_original_name . '.';
+        if (($selection['mode'] ?? 'folder') === 'criteria') {
+            $lines[] = 'Catatan: pencocokan kriteria saat ini berbasis frasa yang ditemukan dalam teks CV, bukan penilaian semantik penuh terhadap seluruh persyaratan tender.';
+        }
+        $lines[] = 'Apakah Anda menyetujui daftar ini? Balas "Saya setuju, lanjutkan" untuk mengonfirmasi. '
+            . 'Belum ada CV yang diproses.';
+
+        return implode("\n", $lines);
+    }
+
+    /**
+     * Select source CVs based on explicit candidate names, a requested criterion,
+     * or the legacy all-files-in-folder behavior when no narrower target is stated.
+     *
+     * @param \Illuminate\Support\Collection<int, array<string, mixed>> $docxFiles
+     * @return array{success: bool, mode?: string, items?: array, message?: string}
+     */
+    private function selectCvFilesFromPrompt(string $message, $docxFiles): array
+    {
+        $normalized = $this->normalizeCvSelectionText($message);
+        $criteria = $this->extractCvCriteria($normalized);
+
+        if ($criteria !== null) {
+            $reader = app(SharePointCvReader::class);
+            $matches = [];
+
+            foreach ($docxFiles as $item) {
+                try {
+                    $document = $reader->readDocx(
+                        (string) $item['driveId'],
+                        (string) $item['itemId']
+                    );
+                } catch (Throwable $exception) {
+                    report($exception);
+
+                    return [
+                        'success' => false,
+                        'message' => 'Isi salah satu CV tidak dapat dibaca untuk memvalidasi kriteria. '
+                            . 'Daftar tidak disimpan dan tidak ada file yang diproses. Periksa koneksi SharePoint atau file sumber.',
+                    ];
+                }
+
+                $text = $this->normalizeCvSelectionText((string) ($document['text'] ?? ''));
+
+                if ($text === '') {
+                    return [
+                        'success' => false,
+                        'message' => 'Isi salah satu CV kosong atau tidak dapat diekstrak. '
+                            . 'Daftar tidak disimpan agar kandidat tidak terpilih secara keliru.',
+                    ];
+                }
+
+                if (str_contains($text, $criteria)) {
+                    $matches[] = $item;
+                }
+            }
+
+            if ($matches === []) {
+                return [
+                    'success' => false,
+                    'message' => 'Tidak ditemukan CV yang memuat frasa kriteria "' . $criteria . '". '
+                        . 'Tidak ada file yang diproses. Periksa kembali istilah kriteria yang diminta.',
+                ];
+            }
+
+            return ['success' => true, 'mode' => 'criteria', 'items' => $matches];
+        }
+
+        if (preg_match('/\b(kriteria|yang memenuhi|yang sesuai|berdasarkan persyaratan)\b/u', $normalized) === 1) {
+            return [
+                'success' => false,
+                'message' => 'Permintaan menyebut kriteria tetapi belum menyebutkan frasa kriteria yang dapat diverifikasi. '
+                    . 'Sebutkan posisi atau istilah spesifik, misalnya "Electrical Engineer". Tidak ada file yang diproses.',
+            ];
+        }
+
+        $requestedNames = $this->extractRequestedCvNames($message);
+
+        if ($requestedNames === []) {
+            return [
+                'success' => true,
+                'mode' => 'folder',
+                'items' => $docxFiles->all(),
+            ];
+        }
+
+        $selected = [];
+        $missingNames = [];
+
+        foreach ($requestedNames as $requestedName) {
+            $matches = $docxFiles->filter(function (array $item) use ($requestedName): bool {
+                $filename = pathinfo((string) ($item['name'] ?? ''), PATHINFO_FILENAME);
+                $filename = preg_replace('/^(?:cv|curriculum\s+vitae)\s*/u', '', $filename) ?? $filename;
+                $normalizedFilename = $this->normalizeCvSelectionText($filename);
+
+                return $normalizedFilename !== ''
+                    && (
+                        str_contains($normalizedFilename, $requestedName)
+                        || str_contains($requestedName, $normalizedFilename)
+                    );
+            });
+
+            if ($matches->isEmpty()) {
+                $missingNames[] = $requestedName;
+                continue;
+            }
+
+            if ($matches->count() > 1) {
+                return [
+                    'success' => false,
+                    'message' => 'Nama kandidat "' . $requestedName . '" cocok dengan beberapa file: '
+                        . $matches->pluck('name')->implode(', ')
+                        . '. Mohon sebutkan nama file yang lebih spesifik. Tidak ada file yang diproses.',
+                ];
+            }
+
+            foreach ($matches as $item) {
+                $selected[(string) $item['driveId'] . ':' . (string) $item['itemId']] = $item;
+            }
+        }
+
+        if ($missingNames !== []) {
+            return [
+                'success' => false,
+                'message' => 'Saya tidak menemukan kecocokan file untuk kandidat: '
+                    . implode(', ', $missingNames)
+                    . '. Tidak ada daftar yang disimpan dan tidak ada file yang diproses. '
+                    . 'Periksa ejaan nama atau nama file di SharePoint.',
+            ];
+        }
+
+        return [
+            'success' => true,
+            'mode' => 'names',
+            'items' => array_values($selected),
+        ];
+    }
+
+    private function extractCvSourceFolder(string $message): string
+    {
+        if (preg_match('/\bfolder\s+["“]([^"”]+)["”]/u', $message, $matches) === 1) {
+            return trim($matches[1]);
+        }
+
+        if (preg_match(
+            '/\b(?:di|dari|dalam)\s+folder\s+(.+?)(?=\s+\b(?:menggunakan|dengan|yang|untuk)\b|$)/iu',
+            $message,
+            $matches
+        ) === 1) {
+            return trim($matches[1], " \t\n\r\0\x0B\"“”");
+        }
+
+        return 'Format CV Rapid';
+    }
+
+    /**
+     * Returns a normalized criterion phrase or null when the prompt is not a
+     * criterion-based request. This intentionally does not pretend to perform
+     * semantic tender evaluation.
+     */
+    private function extractCvCriteria(string $normalizedPrompt): ?string
+    {
+        if (preg_match(
+            '/\bcv\s+(.+?)\s+\b(?:yang memenuhi|yang sesuai|berdasarkan|dengan kriteria)\b/u',
+            $normalizedPrompt,
+            $matches
+        ) === 1) {
+            $criteria = trim($matches[1]);
+
+            $criteria = preg_replace('/\b(?:seluruh|semua|all)\b/u', '', $criteria) ?? $criteria;
+            $criteria = trim($criteria);
+
+            return $criteria !== '' && $criteria !== 'yang' ? $criteria : null;
+        }
+
+        if (preg_match(
+            '/\bkriteria(?: tender)?\s*[:\-]\s*(.+?)(?=\s+\b(?:di folder|dari folder|menggunakan template)\b|$)/u',
+            $normalizedPrompt,
+            $matches
+        ) === 1) {
+            $criteria = trim($matches[1]);
+
+            return $criteria !== '' ? $criteria : null;
+        }
+
+        return null;
+    }
+
+    /**
+     * Extract candidate names from the text after "CV", before template/folder
+     * instructions. Names are matched against normalized source filenames.
+     *
+     * @return array<int, string>
+     */
+    private function extractRequestedCvNames(string $message): array
+    {
+        if (preg_match('/\bcv\b(.*)$/iu', $message, $matches) !== 1) {
+            return [];
+        }
+
+        $namesText = trim((string) $matches[1]);
+
+        $namesText = preg_replace(
+            '/\b(?:menggunakan|pakai|dengan|sesuai)\s+(?:template|format|standar)\b.*$/iu',
+            '',
+            $namesText
+        ) ?? $namesText;
+
+        $namesText = preg_replace(
+            '/\b(?:di|dari|dalam)\s+folder\b.*$/iu',
+            '',
+            $namesText
+        ) ?? $namesText;
+
+        $namesText = preg_replace(
+            '/\b(?:untuk tender|berdasarkan kriteria|yang memenuhi|yang sesuai)\b.*$/iu',
+            '',
+            $namesText
+        ) ?? $namesText;
+
+        $parts = preg_split('/\s*(?:,|;|\bdan\b|\bserta\b)\s*/iu', trim($namesText)) ?: [];
+        $names = [];
+
+        foreach ($parts as $part) {
+            $name = $this->normalizeCvSelectionText($part);
+
+            $name = preg_replace(
+                '/\b(?:seluruh|semua|all|cv|tolong|mohon|konversi|ubah|format|rapikan)\b/u',
+                '',
+                $name
+            ) ?? $name;
+            $name = trim($name);
+
+            if (mb_strlen($name) >= 2 && ! in_array($name, ['di', 'folder', 'tender', 'template'], true)) {
+                $names[] = $name;
+            }
+        }
+
+        return array_values(array_unique($names));
+    }
+
+    private function normalizeCvSelectionText(string $value): string
+    {
+        $value = mb_strtolower(trim($value));
+        $value = preg_replace('/\.(?:docx|doc|pdf)$/u', '', $value) ?? $value;
+        $value = preg_replace('/[^\p{L}\p{N}]+/u', ' ', $value) ?? $value;
+        $value = preg_replace('/\s+/u', ' ', $value) ?? $value;
+
+        return trim($value);
+    }
+
+    /**
+     * Resolve a SharePoint folder and save its DOCX files for user confirmation.
+     */
+    public function selectCvSourceFolder(
+        Request $request,
+        Conversation $conversation,
+        CvBatch $batch
+    ) {
+        $this->authorizeConversation($conversation);
+        $this->authorizeCvBatch($batch, $conversation);
+        abort_unless($batch->status === 'draft', 409, 'Batch CV ini tidak lagi berstatus draft.');
+        $validated = $request->validate([
+            'source_folder' => ['required', 'string', 'max:500'],
+        ]);
+        try {
+            $tool = app(ToolRegistry::class)->get('sharepoint_list_folder');
+            if (! $tool) {
+                throw new \RuntimeException('Tool pembaca folder SharePoint belum terdaftar.');
+            }
+            $result = $tool->execute([
+                'query' => $validated['source_folder'],
+            ]);
+        } catch (Throwable $exception) {
+            report($exception);
+            return back()->withErrors([
+                'source_folder' => 'Folder SharePoint gagal dibaca. Periksa koneksi Microsoft Graph dan nama folder.',
+            ]);
+        }
+        if (! is_array($result) || ! ($result['success'] ?? false)) {
+            return back()->withErrors([
+                'source_folder' => is_array($result)
+                    ? ($result['message'] ?? 'Folder SharePoint tidak ditemukan.')
+                    : 'Respons folder SharePoint tidak valid.',
+            ]);
+        }
+        $docxFiles = collect($result['items'] ?? [])
+            ->filter(fn (array $item): bool =>
+                ($item['type'] ?? null) === 'file'
+                && strtolower((string) ($item['extension'] ?? '')) === 'docx'
+                && is_string($item['itemId'] ?? null)
+                && ($item['itemId'] ?? '') !== ''
+                && is_string($item['driveId'] ?? null)
+                && ($item['driveId'] ?? '') !== ''
+            )
+            ->values();
+        if ($docxFiles->isEmpty()) {
+            return back()->withErrors([
+                'source_folder' => 'Folder ditemukan, tetapi tidak ada file DOCX yang dapat diproses.',
+            ]);
+        }
+        try {
+            $batch->items()->delete();
+            foreach ($docxFiles as $item) {
+                $batch->items()->create([
+                    'source_item_id' => $item['itemId'],
+                    'drive_id' => $item['driveId'],
+                    'source_filename' => $item['name'],
+                    'source_path' => trim($result['folder'] ?? $validated['source_folder'], '/') . '/' . $item['name'],
+                    'source_web_url' => $item['webUrl'] ?? null,
+                    'status' => 'pending',
+                ]);
+            }
+            $batch->update([
+                'source_folder' => $result['folder'] ?? $validated['source_folder'],
+                'status' => 'awaiting_confirmation',
+                'total_files' => $docxFiles->count(),
+                'processed_files' => 0,
+                'successful_files' => 0,
+                'failed_files' => 0,
+                'confirmed_at' => null,
+                'started_at' => null,
+                'finished_at' => null,
+            ]);
+        } catch (Throwable $exception) {
+            report($exception);
+            return back()->withErrors([
+                'source_folder' => 'Daftar CV ditemukan, tetapi gagal disimpan ke database.',
+            ]);
+        }
+        return redirect()
+            ->route('ai.chat.show', $conversation)
+            ->with('success', 'Folder berhasil dibaca. Periksa daftar CV di bawah dan konfirmasikan sebelum pemrosesan.');
+    }
+    /**
+     * Record the user's confirmation. This does not process or modify any CV yet.
+     */
+    public function confirmCvBatch(
+        Conversation $conversation,
+        CvBatch $batch
+    ) {
+        $this->authorizeConversation($conversation);
+        $this->authorizeCvBatch($batch, $conversation);
+
+        abort_unless(
+            $batch->status === 'awaiting_confirmation' && $batch->items()->exists(),
+            409,
+            'Batch CV belum siap dikonfirmasi atau sudah pernah diproses.'
+        );
+
+        $batch->update([
+            'status' => 'confirmed',
+            'confirmed_at' => now(),
+        ]);
+
+        try {
+            $this->dispatchCvBatch($batch);
+
+            return redirect()
+                ->route('ai.chat.show', $conversation)
+                ->with(
+                    'success',
+                    "Batch CV ({$batch->total_files} file) berhasil dimasukkan ke antrean. "
+                    . 'Pemrosesan berjalan di background; jalankan queue worker untuk memulai.'
+                );
+        } catch (Throwable $exception) {
+            report($exception);
+
+            $batch->update([
+                'status' => 'failed',
+                'finished_at' => now(),
+            ]);
+
+            return redirect()
+                ->route('ai.chat.show', $conversation)
+                ->withErrors([
+                    'source_folder' => 'Batch gagal dimasukkan ke antrean. Periksa log Laravel untuk detailnya.',
+                ]);
+        }
+    }
+
+    /**
+     * Queue each CV independently so a long Ollama/SharePoint operation
+     * never holds the user's HTTP request open.
+     */
+    private function dispatchCvBatch(CvBatch $batch): void
+    {
+        $templatePath = (string) $batch->template_path;
+        if ($templatePath === '' || ! Storage::disk('local')->exists($templatePath)) {
+            throw new \RuntimeException('Template CV tidak ditemukan.');
+        }
+
+        $items = $batch->items()->get();
+        if ($items->isEmpty()) {
+            throw new \RuntimeException('Batch tidak memiliki file CV untuk diproses.');
+        }
+
+        $outputDirectory = 'cv-outputs/batch-' . $batch->id;
+        Storage::disk('local')->makeDirectory($outputDirectory);
+
+        $batch->update([
+            'status' => 'processing',
+            'started_at' => now(),
+            'finished_at' => null,
+            'total_files' => $items->count(),
+            'processed_files' => 0,
+            'successful_files' => 0,
+            'failed_files' => 0,
+        ]);
+
+        foreach ($items as $item) {
+            $item->update([
+                'status' => 'pending',
+                'started_at' => null,
+                'finished_at' => null,
+                'error_message' => null,
+                'output_path' => null,
+                'output_filename' => null,
+            ]);
+        }
+
+        foreach ($items as $item) {
+            ProcessCvBatchItem::dispatch($item->id);
+        }
+    }
+
+
+    
+    public function downloadCvBatchZip(
+        Conversation $conversation,
+        CvBatch $batch
+    ) {
+        $this->authorizeConversation($conversation);
+        $this->authorizeCvBatch($batch, $conversation);
+
+        abort_unless(
+            in_array($batch->status, ['completed', 'completed_with_errors'], true),
+            409,
+            'Batch CV belum selesai diproses.'
+        );
+
+        $successfulItems = $batch->items()
+            ->where('status', 'success')
+            ->whereNotNull('output_path')
+            ->get();
+
+        abort_if(
+            $successfulItems->count() < 2,
+            404,
+            'Minimal dua CV berhasil diperlukan untuk membuat ZIP.'
+        );
+
+        $zipDirectory = storage_path('app/private/cv-zip-temp');
+
+        if (! is_dir($zipDirectory)) {
+            mkdir($zipDirectory, 0755, true);
+        }
+
+        $zipPath = $zipDirectory . '/CV-Tender-Batch-' . $batch->id
+            . '-' . uniqid() . '.zip';
+
+        $zip = new ZipArchive();
+
+        if ($zip->open($zipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
+            throw new \RuntimeException('File ZIP gagal dibuat.');
+        }
+
+        $addedFiles = 0;
+
+        try {
+            foreach ($successfulItems as $item) {
+                $relativePath = (string) $item->output_path;
+
+                if (! Storage::disk('local')->exists($relativePath)) {
+                    continue;
+                }
+
+                $absolutePath = Storage::disk('local')->path($relativePath);
+                $filename = basename($relativePath);
+
+                if ($zip->addFile($absolutePath, $filename)) {
+                    $addedFiles++;
+                }
+            }
+
+            $zip->close();
+        } catch (Throwable $exception) {
+            $zip->close();
+
+            if (is_file($zipPath)) {
+                @unlink($zipPath);
+            }
+
+            throw $exception;
+        }
+
+        if ($addedFiles < 2 || ! is_file($zipPath)) {
+            if (is_file($zipPath)) {
+                @unlink($zipPath);
+            }
+
+            abort(404, 'Tidak cukup file CV yang tersedia untuk diunduh.');
+        }
+
+        return response()->download(
+            $zipPath,
+            'CV-Tender-Batch-' . $batch->id . '.zip',
+            ['Content-Type' => 'application/zip']
+        )->deleteFileAfterSend(true);
+    }
+
+
+    private function authorizeCvBatch(CvBatch $batch, Conversation $conversation): void
+    {
+        abort_unless(
+            $batch->user_id === Auth::id()
+            && (int) $batch->conversation_id === (int) $conversation->id,
+            404
+        );
+    }
+    /**
+     * Endpoint upload lama dipertahankan agar route yang sudah ada
+     * tidak langsung rusak. UI baru mengirim template melalui send().
+     */
+    public function uploadCvTemplate(
+        Request $request,
+        Conversation $conversation
+    ) {
+        $this->authorizeConversation($conversation);
+        $validated = $request->validate([
+            'template' => [
+                'required',
+                'file',
+                'mimes:docx',
+                'max:10240',
+            ],
+        ]);
+        $file = $validated['template'];
+        if (strtolower($file->getClientOriginalExtension()) !== 'docx') {
+            return back()->withErrors([
+                'template' => 'Template harus berupa file Word (.docx).',
+            ]);
+        }
+        $storedName = Str::uuid() . '.docx';
+        $path = $file->storeAs(
+            'cv-templates/' . Auth::id(),
+            $storedName,
+            'local'
+        );
+        if (! $path) {
+            return back()->withErrors([
+                'template' => 'Template gagal disimpan. Silakan coba lagi.',
+            ]);
+        }
+        try {
+            CvBatch::create([
+                'user_id' => Auth::id(),
+                'conversation_id' => $conversation->id,
+                'template_path' => $path,
+                'template_original_name' => $file->getClientOriginalName(),
+                'source_folder' => null,
+                'status' => 'draft',
+            ]);
+        } catch (Throwable $exception) {
+            Storage::disk('local')->delete($path);
+            report($exception);
+            return back()->withErrors([
+                'template' => 'Data template gagal disimpan. Silakan coba lagi.',
+            ]);
+        }
+        return redirect()
+            ->route('ai.chat.show', $conversation)
+            ->with(
+                'success',
+                'Template CV berhasil diunggah. '
+                . 'Silakan lanjutkan dengan memilih folder sumber CV.'
+            );
+    }
+    public function destroy(Conversation $conversation)
+    {
+        $this->authorizeConversation($conversation);
+        $conversation->delete();
+        return redirect()
+            ->route('ai.chat.index')
+            ->with('success', 'Percakapan berhasil dihapus.');
+    }
+    private function authorizeConversation(Conversation $conversation): void
+    {
+        abort_unless(
+            $conversation->user_id === Auth::id(),
+            403
+        );
+    }
+}

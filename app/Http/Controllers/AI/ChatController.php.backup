@@ -1,0 +1,198 @@
+<?php
+
+namespace App\Http\Controllers\AI;
+
+use App\Http\Controllers\Controller;
+use App\Models\Conversation;
+use App\Models\Message;
+use App\Services\AI\AIService;
+use App\Models\CvBatch;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+
+use Throwable;
+
+class ChatController extends Controller
+{
+    public function __construct(private AIService $aiService)
+    {
+    }
+
+    public function index()
+    {
+        $conversations = Conversation::where('user_id', Auth::id())
+            ->latest()
+            ->get();
+
+        return view('ai.chat.index', compact('conversations'));
+    }
+
+    public function storeConversation()
+    {
+        $conversation = Conversation::create([
+            'user_id' => Auth::id(),
+            'title' => 'New Conversation',
+        ]);
+
+        return redirect()->route('ai.chat.show', $conversation);
+    }
+
+    public function show(Conversation $conversation)
+    {
+        $this->authorizeConversation($conversation);
+
+        $conversations = Conversation::where('user_id', Auth::id())
+            ->latest()
+            ->get();
+
+        $conversation->load('messages');
+
+        return view('ai.chat.show', [
+            'conversation' => $conversation,
+            'conversations' => $conversations,
+        ]);
+    }
+
+    public function send(Request $request, Conversation $conversation)
+    {
+        $this->authorizeConversation($conversation);
+
+        $validated = $request->validate([
+            'content' => ['required', 'string', 'max:10000'],
+            
+        ]);
+
+        $messages = $conversation->messages()
+            ->orderBy('id')
+            ->get();
+
+        Message::create([
+            'conversation_id' => $conversation->id,
+            'role' => 'user',
+            'content' => $validated['content'],
+        ]);
+
+        try {
+            $response = $this->aiService->chat(
+                $messages,
+                $validated['content']
+            );
+        } catch (Throwable $exception) {
+            report($exception);
+
+            return redirect()
+                ->route('ai.chat.show', $conversation)
+                ->withInput()
+                ->with(
+                    'ai_error',
+                    'AI sedang mengalami gangguan atau beban tinggi. '
+                    . 'Silakan coba lagi beberapa saat.'
+                );
+        }
+
+        Message::create([
+            'conversation_id' => $conversation->id,
+            'role' => 'assistant',
+            'content' => $response,
+        ]);
+
+        if ($conversation->title === 'New Conversation') {
+            $conversation->update([
+                'title' => str($validated['content'])
+                    ->limit(50)
+                    ->toString(),
+            ]);
+        }
+
+        return redirect()->route('ai.chat.show', $conversation);
+    }
+
+   
+    public function uploadCvTemplate(
+        Request $request,
+        Conversation $conversation
+    ) {
+        $this->authorizeConversation($conversation);
+
+        $validated = $request->validate([
+            'template' => [
+                'required',
+                'file',
+                'mimes:docx',
+                'max:10240',
+            ],
+        ]);
+
+        $file = $validated['template'];
+
+        // Pastikan ekstensi file sesuai dengan format yang diizinkan.
+        if (strtolower($file->getClientOriginalExtension()) !== 'docx') {
+            return back()->withErrors([
+                'template' => 'Template harus berupa file Word (.docx).',
+            ]);
+        }
+
+        $storedName = Str::uuid() . '.docx';
+
+        $path = $file->storeAs(
+            'cv-templates/' . Auth::id(),
+            $storedName,
+            'local'
+        );
+
+        if (! $path) {
+            return back()->withErrors([
+                'template' => 'Template gagal disimpan. Silakan coba lagi.',
+            ]);
+        }
+
+        try {
+            CvBatch::create([
+                'user_id' => Auth::id(),
+                'conversation_id' => $conversation->id,
+                'template_path' => $path,
+                'template_original_name' => $file->getClientOriginalName(),
+                'source_folder' => null,
+                'status' => 'draft',
+            ]);
+        } catch (Throwable $exception) {
+            Storage::disk('local')->delete($path);
+
+            report($exception);
+
+            return back()->withErrors([
+                'template' => 'Data template gagal disimpan. Silakan coba lagi.',
+            ]);
+        }
+
+        return redirect()
+            ->route('ai.chat.show', $conversation)
+            ->with(
+                'success',
+                'Template CV berhasil diunggah. '
+                . 'Silakan lanjutkan dengan memilih folder sumber CV.'
+            );
+    }
+   
+
+    public function destroy(Conversation $conversation)
+    {
+        $this->authorizeConversation($conversation);
+
+        $conversation->delete();
+
+        return redirect()
+            ->route('ai.chat.index')
+            ->with('success', 'Percakapan berhasil dihapus.');
+    }
+
+    private function authorizeConversation(Conversation $conversation): void
+    {
+        abort_unless(
+            $conversation->user_id === Auth::id(),
+            403
+        );
+    }
+}

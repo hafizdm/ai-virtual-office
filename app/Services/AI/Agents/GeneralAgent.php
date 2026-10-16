@@ -304,6 +304,11 @@ class GeneralAgent
                 | JSON_PARTIAL_OUTPUT_ON_ERROR
         );
 
+        // Pertahankan format JSON mentah untuk pengujian mock_tool.
+        if ($toolName === 'mock_tool' && is_array($result)) {
+            return $toolResult;
+        }
+
         $finalResponse = $this->provider->chat(
             $systemPrompt
                 . "\n\nYou have already executed the requested tool. "

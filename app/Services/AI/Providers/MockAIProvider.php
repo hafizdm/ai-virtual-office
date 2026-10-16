@@ -24,8 +24,14 @@ class MockAIProvider implements AIProvider
             || str_contains($normalizedMessage, 'jalankan mock tool')
             || str_contains($normalizedMessage, 'test mock tool')
         ) {
+            $toolMessage = preg_replace(
+                '/^.*?mock tool\s*(?:dengan pesan|with message)\s*/iu',
+                '',
+                trim($message)
+            ) ?? trim($message);
+
             return $this->toolCall('mock_tool', [
-                'message' => $message,
+                'message' => trim($toolMessage),
             ]);
         }
 

@@ -1,0 +1,398 @@
+<?php
+
+namespace App\Http\Controllers\AI;
+
+use App\Http\Controllers\Controller;
+use App\Models\Conversation;
+use App\Models\CvBatch;
+use App\Models\Message;
+use App\Services\AI\AIService;
+use App\Services\AI\ToolRegistry;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+use Throwable;
+
+class ChatController extends Controller
+{
+    public function __construct(private AIService $aiService)
+    {
+    }
+
+    public function index()
+    {
+        $conversations = Conversation::where('user_id', Auth::id())
+            ->latest()
+            ->get();
+
+        return view('ai.chat.index', compact('conversations'));
+    }
+
+    public function storeConversation()
+    {
+        $conversation = Conversation::create([
+            'user_id' => Auth::id(),
+            'title' => 'New Conversation',
+        ]);
+
+        return redirect()->route('ai.chat.show', $conversation);
+    }
+
+    public function show(Conversation $conversation)
+    {
+        $this->authorizeConversation($conversation);
+
+        $conversations = Conversation::where('user_id', Auth::id())
+            ->latest()
+            ->get();
+
+        $conversation->load('messages');
+
+        $cvBatch = CvBatch::query()
+            ->where('user_id', Auth::id())
+            ->where('conversation_id', $conversation->id)
+            ->with('items')
+            ->latest('id')
+            ->first();
+
+        return view('ai.chat.show', [
+            'conversation' => $conversation,
+            'conversations' => $conversations,
+            'cvBatch' => $cvBatch,
+        ]);
+    }
+
+  
+    public function send(Request $request, Conversation $conversation)
+    {
+        $this->authorizeConversation($conversation);
+
+        $validated = $request->validate([
+            'content' => ['required', 'string', 'max:10000'],
+            'template' => ['nullable', 'file', 'mimes:docx', 'max:10240'],
+        ]);
+
+        $templatePath = null;
+
+        // Simpan template jika pengguna melampirkan file.
+        if ($request->hasFile('template')) {
+            $file = $validated['template'];
+
+            if (strtolower($file->getClientOriginalExtension()) !== 'docx') {
+                return back()
+                    ->withInput()
+                    ->withErrors([
+                        'template' => 'Template harus berupa file Word (.docx).',
+                    ]);
+            }
+
+            $templatePath = $file->storeAs(
+                'cv-templates/' . Auth::id(),
+                Str::uuid() . '.docx',
+                'local'
+            );
+
+            if (! $templatePath) {
+                return back()
+                    ->withInput()
+                    ->withErrors([
+                        'template' => 'Template gagal disimpan. Silakan coba lagi.',
+                    ]);
+            }
+
+            try {
+                CvBatch::create([
+                    'user_id' => Auth::id(),
+                    'conversation_id' => $conversation->id,
+                    'template_path' => $templatePath,
+                    'template_original_name' => $file->getClientOriginalName(),
+                    'source_folder' => null,
+                    'status' => 'draft',
+                ]);
+            } catch (Throwable $exception) {
+                Storage::disk('local')->delete($templatePath);
+                report($exception);
+
+                return back()
+                    ->withInput()
+                    ->withErrors([
+                        'template' => 'Data template gagal disimpan. Silakan coba lagi.',
+                    ]);
+            }
+        }
+
+        $messages = $conversation->messages()
+            ->orderBy('id')
+            ->get();
+
+        Message::create([
+            'conversation_id' => $conversation->id,
+            'role' => 'user',
+            'content' => $validated['content'],
+        ]);
+
+        try {
+            $response = $this->aiService->chat(
+                $messages,
+                $validated['content']
+            );
+        } catch (Throwable $exception) {
+            report($exception);
+
+            return redirect()
+                ->route('ai.chat.show', $conversation)
+                ->withInput()
+                ->with(
+                    'ai_error',
+                    'AI sedang mengalami gangguan atau beban tinggi. '
+                    . 'Silakan coba lagi beberapa saat.'
+                );
+        }
+
+        if ($templatePath !== null) {
+            $response = "Template CV berhasil diterima dan disimpan sebagai draft. "
+                . "Langkah berikutnya adalah memilih folder sumber CV di SharePoint "
+                . "sebelum memulai pemrosesan.\n\n"
+                . $response;
+        }
+
+        Message::create([
+            'conversation_id' => $conversation->id,
+            'role' => 'assistant',
+            'content' => $response,
+        ]);
+
+        if ($conversation->title === 'New Conversation') {
+            $conversation->update([
+                'title' => str($validated['content'])
+                    ->limit(50)
+                    ->toString(),
+            ]);
+        }
+
+        return redirect()->route('ai.chat.show', $conversation);
+    }
+
+
+    /**
+     * Resolve a SharePoint folder and save its DOCX files for user confirmation.
+     */
+    public function selectCvSourceFolder(
+        Request $request,
+        Conversation $conversation,
+        CvBatch $batch
+    ) {
+        $this->authorizeConversation($conversation);
+        $this->authorizeCvBatch($batch, $conversation);
+
+        abort_unless($batch->status === 'draft', 409, 'Batch CV ini tidak lagi berstatus draft.');
+
+        $validated = $request->validate([
+            'source_folder' => ['required', 'string', 'max:500'],
+        ]);
+
+        try {
+            $tool = app(ToolRegistry::class)->get('sharepoint_list_folder');
+
+            if (! $tool) {
+                throw new \RuntimeException('Tool pembaca folder SharePoint belum terdaftar.');
+            }
+
+            $result = $tool->execute([
+                'query' => $validated['source_folder'],
+            ]);
+        } catch (Throwable $exception) {
+            report($exception);
+
+            return back()->withErrors([
+                'source_folder' => 'Folder SharePoint gagal dibaca. Periksa koneksi Microsoft Graph dan nama folder.',
+            ]);
+        }
+
+        if (! is_array($result) || ! ($result['success'] ?? false)) {
+            return back()->withErrors([
+                'source_folder' => is_array($result)
+                    ? ($result['message'] ?? 'Folder SharePoint tidak ditemukan.')
+                    : 'Respons folder SharePoint tidak valid.',
+            ]);
+        }
+
+        $docxFiles = collect($result['items'] ?? [])
+            ->filter(fn (array $item): bool =>
+                ($item['type'] ?? null) === 'file'
+                && strtolower((string) ($item['extension'] ?? '')) === 'docx'
+                && is_string($item['itemId'] ?? null)
+                && ($item['itemId'] ?? '') !== ''
+                && is_string($item['driveId'] ?? null)
+                && ($item['driveId'] ?? '') !== ''
+            )
+            ->values();
+
+        if ($docxFiles->isEmpty()) {
+            return back()->withErrors([
+                'source_folder' => 'Folder ditemukan, tetapi tidak ada file DOCX yang dapat diproses.',
+            ]);
+        }
+
+        try {
+            $batch->items()->delete();
+
+            foreach ($docxFiles as $item) {
+                $batch->items()->create([
+                    'source_item_id' => $item['itemId'],
+                    'drive_id' => $item['driveId'],
+                    'source_filename' => $item['name'],
+                    'source_path' => trim($result['folder'] ?? $validated['source_folder'], '/') . '/' . $item['name'],
+                    'source_web_url' => $item['webUrl'] ?? null,
+                    'status' => 'pending',
+                ]);
+            }
+
+            $batch->update([
+                'source_folder' => $result['folder'] ?? $validated['source_folder'],
+                'status' => 'awaiting_confirmation',
+                'total_files' => $docxFiles->count(),
+                'processed_files' => 0,
+                'successful_files' => 0,
+                'failed_files' => 0,
+                'confirmed_at' => null,
+                'started_at' => null,
+                'finished_at' => null,
+            ]);
+        } catch (Throwable $exception) {
+            report($exception);
+
+            return back()->withErrors([
+                'source_folder' => 'Daftar CV ditemukan, tetapi gagal disimpan ke database.',
+            ]);
+        }
+
+        return redirect()
+            ->route('ai.chat.show', $conversation)
+            ->with('success', 'Folder berhasil dibaca. Periksa daftar CV di bawah dan konfirmasikan sebelum pemrosesan.');
+    }
+
+    /**
+     * Record the user's confirmation. This does not process or modify any CV yet.
+     */
+    public function confirmCvBatch(
+        Conversation $conversation,
+        CvBatch $batch
+    ) {
+        $this->authorizeConversation($conversation);
+        $this->authorizeCvBatch($batch, $conversation);
+
+        abort_unless(
+            $batch->status === 'awaiting_confirmation' && $batch->items()->exists(),
+            409,
+            'Batch CV belum siap dikonfirmasi.'
+        );
+
+        $batch->update([
+            'status' => 'confirmed',
+            'confirmed_at' => now(),
+        ]);
+
+        return redirect()
+            ->route('ai.chat.show', $conversation)
+            ->with('success', 'Daftar CV berhasil dikonfirmasi. Belum ada CV yang diproses; tahap berikutnya adalah menguji pembacaan satu CV.');
+    }
+
+    private function authorizeCvBatch(CvBatch $batch, Conversation $conversation): void
+    {
+        abort_unless(
+            $batch->user_id === Auth::id()
+            && (int) $batch->conversation_id === (int) $conversation->id,
+            404
+        );
+    }
+
+    /**
+     * Endpoint upload lama dipertahankan agar route yang sudah ada
+     * tidak langsung rusak. UI baru mengirim template melalui send().
+     */
+    public function uploadCvTemplate(
+        Request $request,
+        Conversation $conversation
+    ) {
+        $this->authorizeConversation($conversation);
+
+        $validated = $request->validate([
+            'template' => [
+                'required',
+                'file',
+                'mimes:docx',
+                'max:10240',
+            ],
+        ]);
+
+        $file = $validated['template'];
+
+        if (strtolower($file->getClientOriginalExtension()) !== 'docx') {
+            return back()->withErrors([
+                'template' => 'Template harus berupa file Word (.docx).',
+            ]);
+        }
+
+        $storedName = Str::uuid() . '.docx';
+
+        $path = $file->storeAs(
+            'cv-templates/' . Auth::id(),
+            $storedName,
+            'local'
+        );
+
+        if (! $path) {
+            return back()->withErrors([
+                'template' => 'Template gagal disimpan. Silakan coba lagi.',
+            ]);
+        }
+
+        try {
+            CvBatch::create([
+                'user_id' => Auth::id(),
+                'conversation_id' => $conversation->id,
+                'template_path' => $path,
+                'template_original_name' => $file->getClientOriginalName(),
+                'source_folder' => null,
+                'status' => 'draft',
+            ]);
+        } catch (Throwable $exception) {
+            Storage::disk('local')->delete($path);
+
+            report($exception);
+
+            return back()->withErrors([
+                'template' => 'Data template gagal disimpan. Silakan coba lagi.',
+            ]);
+        }
+
+        return redirect()
+            ->route('ai.chat.show', $conversation)
+            ->with(
+                'success',
+                'Template CV berhasil diunggah. '
+                . 'Silakan lanjutkan dengan memilih folder sumber CV.'
+            );
+    }
+
+    public function destroy(Conversation $conversation)
+    {
+        $this->authorizeConversation($conversation);
+
+        $conversation->delete();
+
+        return redirect()
+            ->route('ai.chat.index')
+            ->with('success', 'Percakapan berhasil dihapus.');
+    }
+
+    private function authorizeConversation(Conversation $conversation): void
+    {
+        abort_unless(
+            $conversation->user_id === Auth::id(),
+            403
+        );
+    }
+}

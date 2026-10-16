@@ -42,6 +42,32 @@ Route::middleware('auth')->group(function () {
 
     Route::post('/ai/chat/{conversation}/messages', [ChatController::class, 'send'])
         ->name('ai.chat.send');
+
+
+    //Upload CV Template
+    Route::post(
+        '/ai/chat/{conversation}/cv-template',
+        [\App\Http\Controllers\AI\ChatController::class, 'uploadCvTemplate']
+    )->name('ai.chat.cv-template.upload');
+
+    // CV Tender Automation: pilih folder sumber dan konfirmasi daftar CV.
+    Route::post(
+        '/ai/chat/{conversation}/cv-batches/{batch}/folder',
+        [ChatController::class, 'selectCvSourceFolder']
+    )->name('ai.chat.cv-batches.folder');
+
+    Route::post(
+        '/ai/chat/{conversation}/cv-batches/{batch}/confirm',
+        [ChatController::class, 'confirmCvBatch']
+    )->name('ai.chat.cv-batches.confirm');
+
+    Route::get(
+        '/ai/chat/{conversation}/cv-batches/{batch}/download',
+        [ChatController::class, 'downloadCvBatchZip']
+    )->name('ai.chat.cv-batches.download');
+
+    
+
 });
 
 require __DIR__.'/auth.php';

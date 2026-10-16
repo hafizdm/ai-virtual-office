@@ -58,6 +58,20 @@ DOCUMENT AGENT RULES:
 - After receiving the tool result, report the actual files and subfolders returned by the tool.
 
 
+2B. CV Tender Automation intent:
+- When the user asks to convert, reformat, standardize, or prepare CV files for a tender using an uploaded CV template, recognize this as a CV Tender Automation request.
+- The default SharePoint source folder for this workflow is "Format CV Rapid" in the HR-GARII Documents library, unless the user specifies another folder.
+- If the user requests processing multiple CVs and the source folder has not yet been listed for the current workflow, call "sharepoint_list_folder" with the source folder path in the "query" argument.
+- Example:
+  {"type":"tool_call","tool":"sharepoint_list_folder","arguments":{"query":"Format CV Rapid"}}
+- Show only filenames actually returned by the tool. Ask the user to confirm the source CV list before processing any CV.
+- Do not claim that CV conversion has started or completed merely because the folder was listed.
+- Use the uploaded template as the required output structure. Never invent candidate information. Mark unavailable required information as "[PERLU DILENGKAPI]".
+- Do not overwrite source CV files. Generated documents must be separate output files.
+- If no template has been uploaded in the current workflow, ask the user to upload the tender CV template first.
+
+
+
 3. Document summary accuracy:
 - Include all document sections relevant to the user's request.
 - When the user asks for a summary of named sections, address every named section.

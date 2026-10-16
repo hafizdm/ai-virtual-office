@@ -1,5 +1,3 @@
-
-
 <!DOCTYPE html>
 
 <html lang="id">
@@ -1020,29 +1018,50 @@
 
         }
 
-
         /* LOADING RAPID AI */
+
         .message-loading .message-content { min-width: 120px; }
+
         .typing-indicator {
+
             display: inline-flex;
+
             align-items: center;
+
             gap: 5px;
+
             min-height: 18px;
+
             padding: 2px 0;
+
         }
+
         .typing-indicator span {
+
             width: 7px;
+
             height: 7px;
+
             border-radius: 50%;
+
             background: #94a3b8;
+
             animation: rapidTyping 1.2s infinite ease-in-out;
+
         }
+
         .typing-indicator span:nth-child(2) { animation-delay: .15s; }
+
         .typing-indicator span:nth-child(3) { animation-delay: .3s; }
+
         @keyframes rapidTyping {
+
             0%, 60%, 100% { transform: translateY(0); opacity: .45; }
+
             30% { transform: translateY(-4px); opacity: 1; }
+
         }
+
         .send-button:disabled { cursor: wait; opacity: .7; }
 
         /* MODAL KONFIRMASI HAPUS */
@@ -1457,6 +1476,273 @@
 
         }
 
+    
+        /* ChatGPT-inspired plus menu for CV template upload */
+        .composer-inner {
+            position: relative;
+        }
+
+        .cv-upload-form[hidden] {
+            display: none !important;
+        }
+
+        .cv-upload-form:not([hidden]) {
+            position: absolute;
+            z-index: 30;
+            left: 0;
+            bottom: calc(100% + 12px);
+            width: min(420px, 100%);
+            padding: 16px;
+            margin: 0;
+            border: 1px solid #e2e8f0;
+            border-radius: 16px;
+            background: #ffffff;
+            box-shadow: 0 16px 45px rgb(15 23 42 / 14%);
+            animation: cvMenuIn .16s ease-out;
+        }
+
+        @keyframes cvMenuIn {
+            from { opacity: 0; transform: translateY(5px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .cv-upload-panel-heading {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+
+        .cv-upload-panel-heading > div {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            min-width: 0;
+        }
+
+        .cv-upload-panel-heading strong {
+            color: #0f172a;
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        .cv-upload-panel-heading span {
+            color: #64748b;
+            font-size: 11px;
+            line-height: 1.5;
+        }
+
+        .cv-upload-close {
+            flex: 0 0 28px;
+            width: 28px;
+            height: 28px;
+            padding: 0;
+            border: 0;
+            border-radius: 8px;
+            background: transparent;
+            color: #64748b;
+            font-size: 23px;
+            line-height: 1;
+            cursor: pointer;
+        }
+
+        .cv-upload-close:hover {
+            background: #f1f5f9;
+            color: #0f172a;
+        }
+
+        .cv-upload-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            min-width: 0;
+            padding: 10px;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            background: #f8fafc;
+        }
+
+        .cv-upload-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+        }
+
+        .cv-attachment-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            width: 38px;
+            height: 38px;
+            border-radius: 10px;
+            color: #2563eb;
+            background: #eff6ff;
+        }
+
+        .cv-attachment-icon svg {
+            width: 20px;
+            height: 20px;
+        }
+
+        .cv-upload-copy {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            min-width: 0;
+        }
+
+        .cv-upload-copy strong {
+            overflow: hidden;
+            color: #334155;
+            font-size: 11px;
+            font-weight: 650;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .cv-upload-copy span {
+            color: #94a3b8;
+            font-size: 10px;
+        }
+
+        .cv-choose-button {
+            flex-shrink: 0;
+            min-height: 32px;
+            padding: 0 10px;
+            border: 1px solid #dbe2ea;
+            border-radius: 9px;
+            background: #ffffff;
+            color: #334155;
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .cv-choose-button:hover {
+            border-color: #fdba74;
+            color: #c2410c;
+        }
+
+        .cv-upload-button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            min-height: 38px;
+            margin-top: 12px;
+            padding: 0 14px;
+            border: 1px solid #f97316;
+            border-radius: 10px;
+            background: #f97316;
+            color: #ffffff;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .cv-upload-button:hover:not(:disabled) {
+            background: #ea580c;
+        }
+
+        .cv-upload-button:disabled {
+            border-color: #fed7aa;
+            background: #fed7aa;
+            cursor: not-allowed;
+        }
+
+        .composer-attach-button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex: 0 0 38px;
+            width: 38px;
+            height: 38px;
+            margin: 2px 0 2px 2px;
+            padding: 0;
+            border: 0;
+            border-radius: 50%;
+            background: transparent;
+            color: #64748b;
+            cursor: pointer;
+            transition: background .18s ease, color .18s ease, transform .18s ease;
+        }
+
+        .composer-attach-button svg {
+            width: 22px;
+            height: 22px;
+        }
+
+        .composer-attach-button:hover,
+        .composer-attach-button[aria-expanded="true"] {
+            background: #fff7ed;
+            color: #ea580c;
+        }
+
+        .composer-attach-button[aria-expanded="true"] svg {
+            transform: rotate(45deg);
+        }
+
+        .composer-attach-button svg {
+            transition: transform .18s ease;
+        }
+
+        @media (max-width: 600px) {
+            .cv-upload-form:not([hidden]) {
+                width: 100%;
+                padding: 12px;
+            }
+
+            .composer-attach-button {
+                flex-basis: 32px;
+                width: 32px;
+                height: 36px;
+            }
+
+            .composer-attach-button svg {
+                width: 20px;
+                height: 20px;
+            }
+        }
+
+
+        /* CV Tender Automation batch panel */
+        .cv-batch-panel { margin: 0 0 22px; padding: 18px; border: 1px solid #fed7aa; border-radius: 14px; background: #fff; box-shadow: 0 3px 12px rgb(15 23 42 / 3%); }
+        .cv-batch-panel-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+        .cv-batch-panel h3 { margin: 0 0 5px; color: #0f172a; font-size: 15px; }
+        .cv-batch-panel p { margin: 0 0 12px; color: #64748b; font-size: 12px; line-height: 1.6; }
+        .cv-batch-status { padding: 5px 8px; border-radius: 7px; background: #fff7ed; color: #9a3412; font-size: 10px; font-weight: 750; white-space: nowrap; }
+        .cv-batch-folder-form label { display: block; margin-bottom: 7px; color: #334155; font-size: 12px; font-weight: 650; }
+        .cv-batch-folder-row { display: flex; gap: 8px; }
+        .cv-batch-folder-row input { flex: 1; min-width: 0; padding: 10px 11px; border: 1px solid #cbd5e1; border-radius: 9px; background: #fff; }
+        .cv-batch-folder-row button, .cv-batch-confirm-button { padding: 10px 14px; border: 1px solid #f97316; border-radius: 9px; background: #f97316; color: #fff; cursor: pointer; font-size: 12px; font-weight: 700; }
+        .cv-batch-folder-row button:hover, .cv-batch-confirm-button:hover { background: #ea580c; }
+        .cv-batch-error { margin-top: 7px; color: #b91c1c; font-size: 12px; }
+        .cv-batch-folder-label { margin: 12px 0; color: #64748b; font-size: 12px; }
+        .cv-batch-file-list { display: grid; gap: 8px; margin: 12px 0; }
+        .cv-batch-file { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 10px; border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc; }
+        .cv-batch-file-icon { flex: 0 0 auto; padding: 6px; border-radius: 6px; background: #dbeafe; color: #1d4ed8; font-size: 9px; font-weight: 800; }
+        .cv-batch-file-copy { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 0; }
+        .cv-batch-file-copy strong { overflow-wrap: anywhere; color: #334155; font-size: 12px; }
+        .cv-batch-file-copy small { color: #64748b; font-size: 10px; }
+        .cv-batch-file a { flex: 0 0 auto; color: #c2410c; font-size: 11px; }
+        .cv-batch-progress { padding: 12px; margin: 12px 0; border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc; }
+        .cv-batch-progress-summary { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; color: #475569; font-size: 11px; }
+        .cv-batch-progress-track { height: 7px; overflow: hidden; margin-top: 10px; border-radius: 99px; background: #e2e8f0; }
+        .cv-batch-progress-track span { display: block; height: 100%; border-radius: inherit; background: #f97316; transition: width .25s ease; }
+        .cv-batch-notice { margin: 10px 0 0 !important; color: #475569 !important; }
+        .cv-batch-notice-success { color: #047857 !important; }
+        .cv-batch-notice-error, .cv-batch-item-error { color: #b91c1c !important; overflow-wrap: anywhere; }
+        .cv-batch-download { display: flex; justify-content: flex-end; margin-top: 14px; }
+        .cv-batch-download-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; padding: 10px 14px; border: 1px solid #f97316; border-radius: 9px; background: #f97316; color: #fff !important; text-decoration: none; font-size: 12px; font-weight: 750; transition: background .2s ease, border-color .2s ease; }
+        .cv-batch-download-button:hover { border-color: #ea580c; background: #ea580c; }
+        .cv-batch-download-button svg { width: 17px; height: 17px; flex: 0 0 auto; }
+
+        @media (max-width: 600px) { .cv-batch-panel { padding: 12px; } .cv-batch-folder-row { flex-direction: column; } .cv-batch-folder-row button { width: 100%; } .cv-batch-file { align-items: flex-start; flex-wrap: wrap; } .cv-batch-file a { margin-left: 42px; } }
+
     </style>
 
 </head>
@@ -1679,7 +1965,128 @@
 
                 @endif
 
-                @forelse ($conversation->messages as $message)
+                
+                @if (isset($cvBatch) && $cvBatch)
+                    @php
+                        $cvBatchItems = $cvBatch->items;
+                        $cvTotal = $cvBatchItems->count();
+                        $cvSuccess = $cvBatchItems->where('status', 'success')->count();
+                        $cvFailed = $cvBatchItems->where('status', 'failed')->count();
+                        $cvProcessing = $cvBatchItems->where('status', 'processing')->count();
+                        $cvQueued = $cvBatchItems->where('status', 'queued')->count();
+                        $cvFinished = $cvSuccess + $cvFailed;
+                    @endphp
+
+                    <section class="cv-batch-panel" aria-labelledby="cv-batch-title">
+                        <div class="cv-batch-panel-header">
+                            <div>
+                                <h3 id="cv-batch-title">CV Tender Automation</h3>
+                                <p>Template: {{ $cvBatch->template_original_name ?: 'Belum ditentukan' }}</p>
+                            </div>
+                            <span class="cv-batch-status">{{ str_replace('_', ' ', strtoupper($cvBatch->status)) }}</span>
+                        </div>
+
+                        @if ($cvBatch->status === 'draft')
+                            <p>Pilih folder SharePoint yang berisi CV sumber. Untuk pengujian pertama, gunakan <strong>Format CV Rapid</strong>.</p>
+                            <form method="POST" action="{{ route('ai.chat.cv-batches.folder', [$conversation, $cvBatch]) }}" class="cv-batch-folder-form">
+                                @csrf
+                                <label for="source_folder">Folder SharePoint (di dalam Documents)</label>
+                                <div class="cv-batch-folder-row">
+                                    <input id="source_folder" name="source_folder" type="text" value="{{ old('source_folder', 'Format CV Rapid') }}" required maxlength="500" placeholder="Contoh: Format CV Rapid">
+                                    <button type="submit">Tampilkan CV</button>
+                                </div>
+                                @error('source_folder')
+                                    <div class="cv-batch-error">{{ $message }}</div>
+                                @enderror
+                            </form>
+                        @endif
+
+                        @if ($cvBatchItems->isNotEmpty())
+                            <div class="cv-batch-folder-label">
+                                Folder sumber: <strong>{{ $cvBatch->source_folder }}</strong>
+                            </div>
+
+                            @if (in_array($cvBatch->status, ['confirmed', 'queued', 'processing', 'completed', 'completed_with_errors', 'failed'], true))
+                                <div class="cv-batch-progress" role="status" aria-live="polite">
+                                    <div class="cv-batch-progress-summary">
+                                        <span><strong>{{ $cvFinished }}</strong> / {{ $cvTotal }} CV selesai</span>
+                                        <span>{{ $cvSuccess }} berhasil · {{ $cvFailed }} gagal</span>
+                                    </div>
+                                    <div class="cv-batch-progress-track" aria-label="Kemajuan batch">
+                                        <span style="width: {{ $cvTotal > 0 ? min(100, round(($cvFinished / $cvTotal) * 100)) : 0 }}%"></span>
+                                    </div>
+
+                                    @if (in_array($cvBatch->status, ['confirmed', 'queued'], true))
+                                        <p class="cv-batch-notice">Batch sudah dikonfirmasi dan menunggu worker antrean untuk memproses dokumen.</p>
+                                    @elseif ($cvBatch->status === 'processing')
+                                        <p class="cv-batch-notice">Pemrosesan sedang berjalan. Anda dapat membuka kembali percakapan ini untuk melihat status terakhir.</p>
+                                    @elseif ($cvBatch->status === 'completed')
+                                        <p class="cv-batch-notice cv-batch-notice-success">Semua CV selesai diproses.</p>
+                                    @elseif ($cvBatch->status === 'completed_with_errors')
+                                        <p class="cv-batch-notice">Batch selesai, tetapi ada CV yang gagal. Periksa status setiap file di bawah.</p>
+                                    @elseif ($cvBatch->status === 'failed')
+                                        <p class="cv-batch-notice cv-batch-notice-error">Batch gagal diproses. Periksa status dan pesan kesalahan pada item yang gagal.</p>
+                                    @endif
+                                </div>
+                            @endif
+
+                            <div class="cv-batch-file-list">
+                                @foreach ($cvBatchItems as $cvItem)
+                                    <div class="cv-batch-file">
+                                        <span class="cv-batch-file-icon">DOCX</span>
+                                        <div class="cv-batch-file-copy">
+                                            <strong>{{ $cvItem->source_filename }}</strong>
+                                            <small>Status: {{ strtoupper(str_replace('_', ' ', $cvItem->status)) }}</small>
+                                            @if ($cvItem->error_message)
+                                                <small class="cv-batch-item-error">{{ $cvItem->error_message }}</small>
+                                            @endif
+                                            @if ($cvItem->output_filename)
+                                                <small>Hasil: {{ $cvItem->output_filename }}</small>
+                                            @endif
+                                        </div>
+                                        @if ($cvItem->source_web_url)
+                                            <a href="{{ $cvItem->source_web_url }}" target="_blank" rel="noopener noreferrer">Buka sumber</a>
+                                        @endif
+                                    </div>
+                                @endforeach
+                            </div>
+
+                            @if ($cvBatch->status === 'awaiting_confirmation')
+                                <p>Periksa daftar CV di atas. Dokumen belum diproses sampai Anda mengonfirmasi daftar ini.</p>
+                                <form method="POST" action="{{ route('ai.chat.cv-batches.confirm', [$conversation, $cvBatch]) }}">
+                                    @csrf
+                                    <button type="submit" class="cv-batch-confirm-button">Konfirmasi &amp; Mulai Proses</button>
+                                </form>
+                            @elseif (in_array($cvBatch->status, ['confirmed', 'queued', 'processing'], true))
+                                <p class="cv-batch-notice">Batch telah dikirim ke alur pemrosesan. Jangan mengirim konfirmasi berulang kali.</p>
+                            @endif
+
+                            @if (
+                                in_array($cvBatch->status, ['completed', 'completed_with_errors'], true)
+                                && $cvSuccess > 0
+                            )
+                                <div class="cv-batch-download">
+                                    <a
+                                        href="{{ route('ai.chat.cv-batches.download', [$conversation, $cvBatch]) }}"
+                                        class="cv-batch-download-button"
+                                    >
+                                        <svg viewBox="0 0 24 24" fill="none"
+                                             stroke="currentColor" stroke-width="1.8"
+                                             stroke-linecap="round" stroke-linejoin="round"
+                                             aria-hidden="true">
+                                            <path d="M12 3v12"/>
+                                            <path d="m7 10 5 5 5-5"/>
+                                            <path d="M5 20h14"/>
+                                        </svg>
+                                        Unduh ZIP Hasil CV ({{ $cvSuccess }} DOCX)
+                                    </a>
+                                </div>
+                            @endif
+                        @endif
+                    </section>
+                @endif
+
+@forelse ($conversation->messages as $message)
 
                     <div class="message {{ $message->role === 'user' ? 'user' : 'assistant' }}">
 
@@ -1777,15 +2184,93 @@
 
             <div class="composer-inner">
 
-                <form method="POST"
+                    @if ($errors->has('template'))
+                        <div class="ai-error" role="alert">
+                            {{ $errors->first('template') }}
+                        </div>
+                    @endif
+
+                    <div
+                        id="cv-template-form"
+                        class="cv-upload-form"
+                        aria-label="Upload Template CV Tender"
+                        hidden
+                    >
+                        <div class="cv-upload-panel-heading">
+                            <div>
+                                <strong>Upload Template CV Tender</strong>
+                                <span>Pilih format Word untuk konversi CV</span>
+                            </div>
+                            <button type="button" id="cv-upload-close" class="cv-upload-close" aria-label="Tutup menu upload">&times;</button>
+                        </div>
+
+                        <div class="cv-upload-row">
+                            <div class="cv-upload-info">
+                                <div class="cv-attachment-icon">
+                                    <svg viewBox="0 0 24 24" fill="none"
+                                         stroke="currentColor" stroke-width="1.8"
+                                         stroke-linecap="round" stroke-linejoin="round"
+                                         aria-hidden="true">
+                                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                                        <path d="M14 2v6h6"/>
+                                        <path d="M8 13h8M8 17h8"/>
+                                    </svg>
+                                </div>
+
+                                <div class="cv-upload-copy">
+                                    <strong id="cv-template-name">Belum ada file dipilih</strong>
+                                    <span id="cv-template-status">DOCX · Maksimal 10 MB</span>
+                                </div>
+                            </div>
+
+                            <button
+                                type="button"
+                                class="cv-choose-button"
+                                id="cv-choose-button"
+                            >
+                                Pilih file
+                            </button>
+                        </div>
+
+                        <div class="cv-upload-panel-note">
+                            File akan dikirim bersama instruksi saat Anda menekan Send.
+                        </div>
+                    </div>
+
+             <form method="POST"
 
                       action="{{ route('ai.chat.send', $conversation) }}"
 
-                      class="composer-box">
+                      class="composer-box"
+                       enctype="multipart/form-data">
 
                     @csrf
 
-                    <textarea name="content"
+                    <button
+                            type="button"
+                            class="composer-attach-button"
+                            id="cv-menu-toggle"
+                            aria-label="Buka menu lampiran"
+                            aria-expanded="false"
+                            aria-controls="cv-template-form"
+                            title="Lampiran dan fitur"
+                        >
+                            <svg viewBox="0 0 24 24" fill="none"
+                                 stroke="currentColor" stroke-width="2"
+                                 stroke-linecap="round" aria-hidden="true">
+                                <path d="M12 5v14M5 12h14"/>
+                            </svg>
+                        </button>
+
+                        <input
+                            type="file"
+                            name="template"
+                            id="cv-template"
+                            accept=".docx"
+                            hidden
+                        />
+
+                        <textarea name="content"
 
                               id="chat-input"
 
@@ -2123,91 +2608,260 @@ if (chatInput) {
 
 }
 
-
 // Optimistic UI: tampilkan pesan pengguna dan loading sebelum respons Laravel kembali.
+
 const chatForm = document.querySelector('.composer-box');
+
 const sendButton = chatForm ? chatForm.querySelector('.send-button') : null;
 
 if (chatForm && chatInput && sendButton && messagesContainer) {
+
     let chatSubmitting = false;
 
     chatForm.addEventListener('submit', function (event) {
+
         if (chatSubmitting) {
+
             event.preventDefault();
+
             return;
+
         }
 
         const messageText = chatInput.value.trim();
+
         if (!messageText) {
+
             event.preventDefault();
+
             chatInput.focus();
+
             return;
+
         }
 
         // Salin isi pesan ke hidden input supaya teks tetap terkirim saat textarea dikosongkan.
+
         const hiddenContent = document.createElement('input');
+
         hiddenContent.type = 'hidden';
+
         hiddenContent.name = 'content';
+
         hiddenContent.value = messageText;
+
         chatForm.appendChild(hiddenContent);
 
         const inner = messagesContainer.querySelector('.messages-inner');
+
         if (!inner) return;
 
         const emptyChat = inner.querySelector('.empty-chat');
+
         if (emptyChat) emptyChat.remove();
 
         // Bubble pengguna.
+
         const userMessage = document.createElement('div');
+
         userMessage.className = 'message user';
 
         const userContent = document.createElement('div');
+
         userContent.className = 'message-content';
 
         const userRole = document.createElement('div');
+
         userRole.className = 'message-role';
+
         userRole.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/></svg> You';
 
         const userBody = document.createElement('div');
+
         userBody.className = 'message-body';
+
         userBody.textContent = messageText;
 
         userContent.append(userRole, userBody);
+
         userMessage.appendChild(userContent);
+
         inner.appendChild(userMessage);
 
         // Bubble RAPID AI dengan tiga titik bergerak.
+
         const loadingMessage = document.createElement('div');
+
         loadingMessage.className = 'message assistant message-loading';
+
         loadingMessage.id = 'rapid-ai-loading';
 
         const loadingContent = document.createElement('div');
+
         loadingContent.className = 'message-content';
 
         const loadingRole = document.createElement('div');
+
         loadingRole.className = 'message-role';
+
         loadingRole.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="7" width="16" height="13" rx="3"/><path d="M9 7V4h6v3M9 12h.01M15 12h.01M9 16h6"/></svg> RAPID AI';
 
         const typing = document.createElement('div');
+
         typing.className = 'typing-indicator';
+
         typing.setAttribute('role', 'status');
+
         typing.setAttribute('aria-label', 'RAPID AI sedang memproses');
+
         typing.innerHTML = '<span></span><span></span><span></span>';
 
         loadingContent.append(loadingRole, typing);
+
         loadingMessage.appendChild(loadingContent);
+
         inner.appendChild(loadingMessage);
 
         // Kosongkan kolom, cegah klik ganda, lalu biarkan form POST normal ke Laravel.
+
         chatInput.value = '';
+
         chatInput.disabled = true;
+
         sendButton.disabled = true;
+
         sendButton.textContent = 'Memproses...';
+
         chatSubmitting = true;
 
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
+
     });
+
 }
+
+
+// CV template picker: isolated from the existing chat and delete-modal scripts.
+(() => {
+    const fileInput = document.getElementById('cv-template');
+    const chooseButton = document.getElementById('cv-choose-button');
+    const uploadButton = document.getElementById('cv-upload-button');
+    const fileName = document.getElementById('cv-template-name');
+    const fileStatus = document.getElementById('cv-template-status');
+    const templateForm = document.getElementById('cv-template-form');
+
+    if (!fileInput || !chooseButton || !uploadButton ||
+        !fileName || !fileStatus || !templateForm) return;
+
+    chooseButton.addEventListener('click', () => fileInput.click());
+
+    fileInput.addEventListener('change', () => {
+        const file = fileInput.files && fileInput.files[0];
+
+        if (!file) {
+            fileName.textContent = 'Lampirkan template CV tender';
+            fileStatus.textContent = 'Pilih file Word (.docx), maksimal 10 MB';
+            uploadButton.disabled = true;
+            return;
+        }
+
+        fileName.textContent = file.name;
+        const sizeInMb = file.size / (1024 * 1024);
+        fileStatus.textContent = `File dipilih · ${sizeInMb.toFixed(2)} MB`;
+        uploadButton.disabled = !file.name.toLowerCase().endsWith('.docx')
+            || file.size > 10 * 1024 * 1024;
+    });
+
+    templateForm.addEventListener('submit', (event) => {
+        const file = fileInput.files && fileInput.files[0];
+
+        if (!file || !file.name.toLowerCase().endsWith('.docx')
+            || file.size > 10 * 1024 * 1024) {
+            event.preventDefault();
+            fileStatus.textContent = 'Pilih file .docx yang berukuran maksimal 10 MB.';
+            uploadButton.disabled = true;
+            return;
+        }
+
+        uploadButton.disabled = true;
+        uploadButton.textContent = 'Mengunggah...';
+    });
+})();
+
+
+// CV template attachment: file is sent with the existing chat form.
+(() => {
+    const menu = document.getElementById('cv-template-form');
+    const toggle = document.getElementById('cv-menu-toggle');
+    const closeButton = document.getElementById('cv-upload-close');
+    const fileInput = document.getElementById('cv-template');
+    const chooseButton = document.getElementById('cv-choose-button');
+    const fileName = document.getElementById('cv-template-name');
+    const fileStatus = document.getElementById('cv-template-status');
+    const chatForm = document.querySelector('.composer-box');
+
+    if (!menu || !toggle || !closeButton || !fileInput ||
+        !chooseButton || !fileName || !fileStatus || !chatForm) return;
+
+    const openMenu = () => {
+        menu.hidden = false;
+        toggle.setAttribute('aria-expanded', 'true');
+    };
+
+    const closeMenu = () => {
+        menu.hidden = true;
+        toggle.setAttribute('aria-expanded', 'false');
+    };
+
+    toggle.addEventListener('click', () => {
+        if (menu.hidden) openMenu();
+        else closeMenu();
+    });
+
+    closeButton.addEventListener('click', closeMenu);
+    chooseButton.addEventListener('click', () => fileInput.click());
+
+    fileInput.addEventListener('change', () => {
+        const file = fileInput.files && fileInput.files[0];
+
+        if (!file) {
+            fileName.textContent = 'Belum ada file dipilih';
+            fileStatus.textContent = 'DOCX · Maksimal 10 MB';
+            return;
+        }
+
+        fileName.textContent = file.name;
+        const sizeInMb = file.size / (1024 * 1024);
+        const valid = file.name.toLowerCase().endsWith('.docx') &&
+            file.size <= 10 * 1024 * 1024;
+
+        fileStatus.textContent = valid
+            ? `Lampiran siap dikirim · ${sizeInMb.toFixed(2)} MB`
+            : 'Pilih file .docx maksimal 10 MB.';
+        if (valid) closeMenu();
+    });
+
+    chatForm.addEventListener('submit', (event) => {
+        const file = fileInput.files && fileInput.files[0];
+        if (file && (!file.name.toLowerCase().endsWith('.docx') ||
+            file.size > 10 * 1024 * 1024)) {
+            event.preventDefault();
+            openMenu();
+            fileStatus.textContent = 'Pilih file .docx maksimal 10 MB.';
+        }
+    });
+
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && !menu.hidden) closeMenu();
+    });
+
+    document.addEventListener('click', (event) => {
+        if (!menu.hidden && !menu.contains(event.target) &&
+            !toggle.contains(event.target)) {
+            closeMenu();
+        }
+    });
+})();
 
 </script>
 

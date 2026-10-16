@@ -134,7 +134,10 @@ class FolderReaderTool implements Tool
             $isFolder = isset($item['folder']);
             $extension = pathinfo($name, PATHINFO_EXTENSION);
 
+          
             $results[] = [
+                'itemId' => $item['id'] ?? null,
+                'driveId' => $driveId,
                 'name' => $name,
                 'type' => $isFolder ? 'folder' : 'file',
                 'extension' => $isFolder || $extension === ''
@@ -147,6 +150,7 @@ class FolderReaderTool implements Tool
                 'lastModifiedDateTime' =>
                     $item['lastModifiedDateTime'] ?? null,
             ];
+
         }
 
         return [
